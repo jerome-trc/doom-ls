@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="512"
+   height="512"
+   viewBox="0 0 135.46666 135.46667"
+   version="1.1"
+   id="svg5"
+   inkscape:version="1.1.2 (0a00cf5339, 2022-02-04)"
+   sodipodi:docname="gzdoom.svg"
+   inkscape:export-xdpi="43.78476"
+   inkscape:export-ydpi="43.78476"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview7"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:document-units="mm"
+     showgrid="false"
+     units="px"
+     width="512px"
+     showguides="false"
+     inkscape:guide-bbox="true"
+     inkscape:zoom="1.0456808"
+     inkscape:cx="228.55924"
+     inkscape:cy="245.7729"
+     inkscape:window-width="1920"
+     inkscape:window-height="1012"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer2">
+    <sodipodi:guide
+       position="53.409002,70.434684"
+       orientation="1,0"
+       id="guide1042" />
+    <sodipodi:guide
+       position="66.640426,62.897006"
+       orientation="1,0"
+       id="guide1044" />
+    <sodipodi:guide
+       position="53.409002,70.434684"
+       orientation="0,-1"
+       id="guide1086" />
+    <sodipodi:guide
+       position="63.825542,91.503583"
+       orientation="0,-1"
+       id="guide1468" />
+    <sodipodi:guide
+       position="105.99114,91.503583"
+       orientation="1,0"
+       id="guide1470" />
+    <sodipodi:guide
+       position="105.99114,43.772391"
+       orientation="0,-1"
+       id="guide1472" />
+    <sodipodi:guide
+       position="105.99114,55.670282"
+       orientation="0,-1"
+       id="guide1474" />
+    <sodipodi:guide
+       position="40.540406,79.208972"
+       orientation="1,0"
+       id="guide1552" />
+    <sodipodi:guide
+       position="105.99114,76.974356"
+       orientation="0.64007817,-0.76830979"
+       id="guide1743" />
+  </sodipodi:namedview>
+  <defs
+     id="defs2">
+    <inkscape:path-effect
+       effect="fill_between_many"
+       method="originald"
+       linkedpaths="#path1021,0,1|#path1807,0,1"
+       id="path-effect2539" />
+    <inkscape:path-effect
+       effect="fill_between_many"
+       method="originald"
+       linkedpaths="#path1807,0,1|#path1021,0,1"
+       id="path-effect2543" />
+    <inkscape:path-effect
+       effect="fill_between_many"
+       method="originald"
+       linkedpaths="#path1807,0,1|#path1021,0,1"
+       id="path-effect2576" />
+    <inkscape:path-effect
+       effect="fill_between_many"
+       method="originald"
+       linkedpaths="#path1021,0,1|#path1807,0,1"
+       id="path-effect2599" />
+    <inkscape:path-effect
+       effect="fill_between_many"
+       method="originald"
+       linkedpaths="#path1021,0,1|#path1807,0,1"
+       id="path-effect2679" />
+    <inkscape:path-effect
+       effect="fill_between_many"
+       method="originald"
+       linkedpaths="#path1021,0,1|#path1807,0,1"
+       id="path-effect2685" />
+  </defs>
+  <g
+     inkscape:groupmode="layer"
+     id="layer2"
+     inkscape:label="Circle"
+     style="display:inline;opacity:1"
+     sodipodi:insensitive="true">
+    <ellipse
+       style="fill:#2a7eb7;stroke-width:0.266764"
+       id="path905"
+       cx="67.73333"
+       cy="67.73333"
+       rx="65.281975"
+       ry="64.453178" />
+  </g>
+  <g
+     inkscape:groupmode="layer"
+     id="layer3"
+     inkscape:label="GZ">
+    <path
+       inkscape:original-d="M 0,0"
+       inkscape:path-effect="#path-effect2539"
+       d="M 0,0"
+       id="path2541" />
+    <path
+       inkscape:original-d="M 0,0"
+       inkscape:path-effect="#path-effect2543"
+       d="M 0,0"
+       id="path2545" />
+    <path
+       inkscape:original-d="M 0,0"
+       inkscape:path-effect="#path-effect2576"
+       d="M 0,0"
+       id="path2578" />
+    <path
+       inkscape:original-d="M 0,0"
+       inkscape:path-effect="#path-effect2599"
+       d="M 0,0"
+       id="path2601" />
+    <path
+       d="M 0,0"
+       id="path2681"
+       inkscape:original-d="M 0,0"
+       inkscape:path-effect="#path-effect2679" />
+    <path
+       inkscape:original-d="M 0,0"
+       inkscape:path-effect="#path-effect2685"
+       d="M 0,0"
+       id="path2687" />
+    <path
+       id="path1807"
+       style="fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.324064px;stroke-linecap:butt;stroke-linejoin:miter;stroke-opacity:1"
+       d="m 34.962896,38.597425 c -24.901326,0 -26.7760654,58.462502 0,58.462502 H 115.12601 V 82.486868 H 83.805717 L 115.12601,56.39347 V 38.597425 Z m 0,15.058531 H 90.716625 L 66.930038,73.635684 v -9.23222 H 50.724627 V 82.486868 H 34.962896 c -3.906408,0 -3.536419,-28.830912 0,-28.830912 z" />
+  </g>
+</svg>

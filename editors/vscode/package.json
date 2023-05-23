@@ -1,0 +1,86 @@
+{
+  "name": "doomlsp",
+  "displayName": "DoomLSP",
+  "description": "DoomLSP client; provides Doom DSL support",
+  "version": "0.0.1",
+  "author": "jerome-trc",
+  "publisher": "jerome-trc",
+  "license": "MIT OR Apache-2.0",
+  "engines": {
+    "vscode": "^1.78.0"
+  },
+  "repository": {
+	"type": "git",
+	"url": "https://github.com/jerome-trc/doom-lsp"
+  },
+  "bugs": {
+	"url": "https://github.com/jerome-trc/doom-lsp/issues"
+  },
+  "homepage": "https://github.com/jerome-trc/doom-lsp",
+  "keywords": [
+	"doom"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+	"languages": [
+		{
+			"id": "zscript",
+			"aliases": [
+				"ZScript"
+			],
+			"extensions": [
+				".zs",
+				".zc",
+				".zsc"
+			],
+			"configuration": "langs/zscript/lang-config.json",
+			"icon": {
+				"light": "./langs/gzdoom.svg",
+				"dark": "./langs/gzdoom.svg"
+			}
+		}
+	],
+	"configuration": {
+		"type": "object",
+		"title": "DoomLSP",
+		"properties": {
+			"doomlsp.server.enable": {
+				"type": "boolean",
+				"default": true,
+				"markdownDescription": "Enable the language server."
+			}
+		}
+	},
+    "commands": [
+    ]
+  },
+  "icon": "icon.png",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "dependencies": {
+	"vscode-languageclient": "^8.1.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.78.0",
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "^18.11.3",
+    "@typescript-eslint/eslint-plugin": "^5.59.1",
+    "@typescript-eslint/parser": "^5.59.1",
+    "eslint": "^8.39.0",
+    "glob": "^8.1.0",
+    "mocha": "^10.2.0",
+    "typescript": "^5.0.4",
+    "@vscode/test-electron": "^2.3.0"
+  }
+}
