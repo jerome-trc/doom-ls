@@ -28,6 +28,7 @@ Session.vim
 # VSCode extension #############################################################
 /editors/vscode/node_modules/
 /editors/vscode/out/
+**/*.vsix
 
 # Miscellaneous ################################################################
 # Generated rustdoc
