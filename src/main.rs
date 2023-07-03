@@ -11,16 +11,31 @@ use lsp_types::{
 	FileChangeType, GotoDefinitionResponse, InitializeParams,
 };
 use rustc_hash::FxHashMap;
+use tracing::{error, info, warn};
+use tracing_subscriber::{
+	fmt::{time::Uptime, writer::BoxMakeWriter},
+	prelude::__tracing_subscriber_SubscriberExt,
+	util::SubscriberInitExt,
+};
 type UnitResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
 fn main() -> UnitResult {
-	eprintln!("Initializing...");
+	let timer = Uptime::default();
+	eprintln!("Attempting log initialization.");
+	let layer_stdout = tracing_subscriber::fmt::Layer::default()
+		.with_timer(timer)
+		.with_ansi(false)
+		.with_writer(BoxMakeWriter::new(std::io::stderr));
+	let collector = tracing_subscriber::registry().with(layer_stdout);
+	collector.init();
+
+	info!("Initializing...");
 	let (conn, threads) = lsp_server::Connection::stdio();
 	let params = conn.initialize(serde_json::to_value(capabilities())?)?;
 	let mut core = Core::new(conn, params);
 	core.main_loop()?;
 	threads.join()?;
-	eprintln!("Shutdown complete.");
+	info!("Shutdown complete.");
 	Ok(())
 }
 
@@ -69,7 +84,7 @@ impl Core {
 			match msg {
 				lsp_server::Message::Request(req) => {
 					if self.conn.handle_shutdown(&req)? {
-						eprintln!("Server shutting down...");
+						info!("Server shutting down...");
 						return Ok(());
 					}
 
@@ -78,7 +93,7 @@ impl Core {
 				lsp_server::Message::Response(_) => {}
 				lsp_server::Message::Notification(notif) => match self.handle_notif(notif) {
 					ControlFlow::Break(Err(err)) => {
-						eprintln!("{err}");
+						error!("{err}");
 					}
 					ControlFlow::Continue(_) | ControlFlow::Break(_) => {}
 				},
@@ -114,7 +129,7 @@ impl Core {
 			let mut fs = self.fs.borrow_mut();
 
 			let hash_map::Entry::Occupied(mut occ) = fs.entry(path.clone()) else {
-				eprintln!("Change made to file {} without it having been opened.", path.display());
+				warn!("Change made to file {} without it having been opened.", path.display());
 				return Ok(());
 			};
 
@@ -150,7 +165,7 @@ impl Core {
 					}
 					FileChangeType::DELETED => {
 						if self.fs.borrow_mut().remove(&path).is_none() {
-							eprintln!("Attempted removal of non-existent file: {}", path.display())
+							warn!("Attempted removal of non-existent file: {}", path.display())
 						}
 					}
 					_ => unreachable!(),
