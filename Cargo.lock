@@ -69,6 +69,7 @@ dependencies = [
  "doomfront",
  "lsp-server",
  "lsp-types",
+ "rustc-hash",
  "serde",
  "serde_json",
 ]

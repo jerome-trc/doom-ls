@@ -6,6 +6,8 @@ A language server covering domain-specific languages written for Doom's source p
 
 ## Licensing, Attribution
 
+DoomLSP's architecture borrows heavily from that of the [Millet Language Server](https://github.com/azdavis/millet) by Ariel Davis.
+
 Client-side syntax highlighting schemes are courtesy of [@KaptainMicila](https://github.com/KaptainMicila/ZScript-VSCode).
 
 DoomLSP is provided under either of

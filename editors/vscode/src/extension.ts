@@ -22,6 +22,16 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		return;
 	}
 
+	start_server(ctx);
+}
+
+async function start_server(ctx: vscode.ExtensionContext) {
+	vscode.window.showInformationMessage('(DoomLSP) Server starting...');
+
+	if (client !== null) {
+		return;
+	}
+
 	const ext = process.platform === "win32" ? ".exe" : "";
 
 	// @sync(init-options)
@@ -37,6 +47,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	};
 
 	client = new LanguageClient("doomlsp", serverOpts, clientOpts);
+	await client.start();
 }
 
 export async function deactivate() {

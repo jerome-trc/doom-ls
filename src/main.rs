@@ -2,64 +2,26 @@
 //!
 //! A language server covering domain-specific languages written for Doom's source ports.
 
-use lsp_server::{Connection, ExtractError, Message, Request, RequestId, Response};
-use lsp_types::{request::GotoDefinition, GotoDefinitionResponse, InitializeParams};
+use std::{cell::RefCell, collections::hash_map, ops::ControlFlow, path::PathBuf};
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-	eprintln!("(DoomLSP) Initializing...");
+use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
+use lsp_types::{
+	notification::{DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument},
+	request::GotoDefinition,
+	FileChangeType, GotoDefinitionResponse, InitializeParams,
+};
+use rustc_hash::FxHashMap;
+type UnitResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+fn main() -> UnitResult {
+	eprintln!("Initializing...");
 	let (conn, threads) = lsp_server::Connection::stdio();
 	let params = conn.initialize(serde_json::to_value(capabilities())?)?;
-	main_loop(conn, params)?;
+	let mut core = Core::new(conn, params);
+	core.main_loop()?;
 	threads.join()?;
-	eprintln!("(DoomLSP) Shutdown complete.");
+	eprintln!("Shutdown complete.");
 	Ok(())
-}
-
-fn main_loop(
-	conn: Connection,
-	params: serde_json::Value,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-	let _: InitializeParams = serde_json::from_value(params).unwrap();
-	let _ = Core::default();
-
-	for msg in &conn.receiver {
-		match msg {
-			lsp_server::Message::Request(req) => {
-				if conn.handle_shutdown(&req)? {
-					return Ok(());
-				}
-
-				match cast::<GotoDefinition>(req) {
-					Ok((id, gdp)) => {
-						eprintln!("(DoomLSP) Got GotoDefinition request (#{id}): {gdp:?}");
-						let result = Some(GotoDefinitionResponse::Array(vec![]));
-						let result = serde_json::to_value(&result).unwrap();
-						let resp = Response {
-							id,
-							result: Some(result),
-							error: None,
-						};
-						conn.sender.send(Message::Response(resp))?;
-						continue;
-					}
-					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-					Err(ExtractError::MethodMismatch(req)) => req,
-				};
-			}
-			lsp_server::Message::Response(_) => {}
-			lsp_server::Message::Notification(_) => {}
-		}
-	}
-
-	Ok(())
-}
-
-fn cast<R>(req: Request) -> Result<(RequestId, R::Params), ExtractError<Request>>
-where
-	R: lsp_types::request::Request,
-	R::Params: serde::de::DeserializeOwned,
-{
-	req.extract(R::METHOD)
 }
 
 #[must_use]
@@ -80,5 +42,201 @@ fn capabilities() -> lsp_types::ServerCapabilities {
 	}
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct Core; // ???
+pub(crate) struct Core {
+	pub(crate) conn: Connection,
+	pub(crate) fs: RefCell<FxHashMap<PathBuf, Document>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct Document {
+	_lang: LangId,
+	source: String,
+}
+
+impl Core {
+	#[must_use]
+	fn new(conn: Connection, params: serde_json::Value) -> Self {
+		let _: InitializeParams = serde_json::from_value(params).unwrap();
+
+		Self {
+			conn,
+			fs: RefCell::new(FxHashMap::default()),
+		}
+	}
+
+	fn main_loop(&mut self) -> UnitResult {
+		for msg in &self.conn.receiver {
+			match msg {
+				lsp_server::Message::Request(req) => {
+					if self.conn.handle_shutdown(&req)? {
+						eprintln!("Server shutting down...");
+						return Ok(());
+					}
+
+					self.handle_request(req);
+				}
+				lsp_server::Message::Response(_) => {}
+				lsp_server::Message::Notification(notif) => match self.handle_notif(notif) {
+					ControlFlow::Break(Err(err)) => {
+						eprintln!("{err}");
+					}
+					ControlFlow::Continue(_) | ControlFlow::Break(_) => {}
+				},
+			}
+		}
+
+		Ok(())
+	}
+
+	fn handle_request(&self, mut req: Request) -> ControlFlow<UnitResult, Request> {
+		req = Self::try_request::<GotoDefinition, _>(req, |id, _params| {
+			let result = Some(GotoDefinitionResponse::Array(vec![]));
+			let result = serde_json::to_value(result).unwrap();
+
+			let resp = Response {
+				id,
+				result: Some(result),
+				error: None,
+			};
+
+			self.conn.sender.send(Message::Response(resp))?;
+			Ok(())
+		})?;
+
+		ControlFlow::Continue(req)
+	}
+
+	fn handle_notif(&self, mut notif: Notification) -> ControlFlow<UnitResult, Notification> {
+		notif = Self::try_notif::<DidChangeTextDocument, _>(notif, |params| {
+			// TODO: Only re-parse as much as necessary.
+			let uri = params.text_document.uri;
+			let path = Self::uri_to_pathbuf(uri)?;
+			let mut fs = self.fs.borrow_mut();
+
+			let hash_map::Entry::Occupied(mut occ) = fs.entry(path.clone()) else {
+				eprintln!("Change made to file {} without it having been opened.", path.display());
+				return Ok(());
+			};
+
+			let source = std::fs::read_to_string(path)?;
+			occ.get_mut().source = source;
+			Ok(())
+		})?;
+
+		notif = Self::try_notif::<DidOpenTextDocument, _>(notif, |params| {
+			let lang_id = match params.text_document.language_id.as_str() {
+				"zscript" => LangId::ZScript,
+				_ => return Ok(()),
+			};
+
+			self.fs.borrow_mut().insert(
+				Self::uri_to_pathbuf(params.text_document.uri)?,
+				Document {
+					_lang: lang_id,
+					source: params.text_document.text,
+				},
+			);
+
+			Ok(())
+		})?;
+
+		notif = Self::try_notif::<DidChangeWatchedFiles, _>(notif, |params| {
+			for change in params.changes {
+				let path = Self::uri_to_pathbuf(change.uri)?;
+
+				match change.typ {
+					FileChangeType::CHANGED | FileChangeType::CREATED => {
+						todo!()
+					}
+					FileChangeType::DELETED => {
+						if self.fs.borrow_mut().remove(&path).is_none() {
+							eprintln!("Attempted removal of non-existent file: {}", path.display())
+						}
+					}
+					_ => unreachable!(),
+				}
+			}
+
+			Ok(())
+		})?;
+
+		ControlFlow::Continue(notif)
+	}
+
+	#[must_use]
+	fn try_request<R, F>(req: Request, callback: F) -> ControlFlow<UnitResult, Request>
+	where
+		R: lsp_types::request::Request,
+		F: FnOnce(RequestId, R::Params) -> UnitResult,
+	{
+		match req.extract::<R::Params>(R::METHOD) {
+			Ok((reqid, params)) => ControlFlow::Break(callback(reqid, params)),
+			Err(err) => Self::extract_error(err),
+		}
+	}
+
+	#[must_use]
+	fn try_notif<N, F>(notif: Notification, callback: F) -> ControlFlow<UnitResult, Notification>
+	where
+		N: lsp_types::notification::Notification,
+		F: FnOnce(N::Params) -> UnitResult,
+	{
+		match notif.extract::<N::Params>(N::METHOD) {
+			Ok(params) => ControlFlow::Break(callback(params)),
+			Err(err) => Self::extract_error(err),
+		}
+	}
+
+	#[must_use]
+	fn extract_error<T>(err: ExtractError<T>) -> ControlFlow<UnitResult, T> {
+		match err {
+			ExtractError::MethodMismatch(t) => ControlFlow::Continue(t),
+			ExtractError::JsonError { method: _, error } => {
+				ControlFlow::Break(Err(Box::new(error)))
+			}
+		}
+	}
+
+	fn uri_to_pathbuf(uri: lsp_types::Url) -> Result<PathBuf, PathError> {
+		if uri.scheme() != "file" {
+			return Err(PathError::NonFileUri(uri.scheme().to_owned()));
+		}
+
+		let ret = match uri.to_file_path() {
+			Ok(pb) => pb,
+			Err(()) => return Err(PathError::NoHost),
+		};
+
+		ret.canonicalize().map_err(PathError::Canonicalize)
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FileKey {
+	path: PathBuf,
+	lang: LangId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum LangId {
+	ZScript,
+}
+
+#[derive(Debug)]
+enum PathError {
+	NoHost,
+	NonFileUri(String),
+	Canonicalize(std::io::Error),
+}
+
+impl std::error::Error for PathError {}
+
+impl std::fmt::Display for PathError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			PathError::NoHost => write!(f, "URI host is neither empty nor `localhost`"),
+			PathError::NonFileUri(scheme) => write!(f, "expected scheme `file`, found: {scheme}"),
+			PathError::Canonicalize(err) => write!(f, "failed to canonicalize a path: {err}"),
+		}
+	}
+}
