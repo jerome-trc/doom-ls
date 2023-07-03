@@ -39,8 +39,8 @@
 			],
 			"configuration": "./langs/zscript.cfg.json",
 			"icon": {
-				"light": "./langs/gzdoom.svg",
-				"dark": "./langs/gzdoom.svg"
+				"light": "./langs/zscript.svg",
+				"dark": "./langs/zscript.svg"
 			}
 		},
 		{
@@ -53,7 +53,11 @@
 			"extensions": [
 				".acs"
 			],
-			"configuration": "./langs/acs.cfg.json"
+			"configuration": "./langs/acs.cfg.json",
+			"icon": {
+				"light": "./langs/acs.svg",
+				"dark": "./langs/acs.svg"
+			}
 		},
 		{
 			"id": "decorate",
@@ -72,7 +76,11 @@
 				"DECORATE",
 				"decorate"
 			],
-			"configuration": "./langs/decorate.cfg.json"
+			"configuration": "./langs/decorate.cfg.json",
+			"icon": {
+				"light": "./langs/decorate.svg",
+				"dark": "./langs/decorate.svg"
+			}
 		},
 		{
 			"id": "mapinfolike",
@@ -80,7 +88,11 @@
 				"MAPINFOLIKE",
 				"mapinfolike"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "mapinfo",
@@ -99,7 +111,11 @@
 				"ZMAPINFO",
 				"zmapinfo"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "lockdefs",
@@ -114,7 +130,11 @@
 				"LOCKDEFS",
 				"lockdefs"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "decaldef",
@@ -129,7 +149,11 @@
 				"DECALDEF",
 				"decaldef"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "menudef",
@@ -144,7 +168,11 @@
 				"MENUDEF",
 				"menudef"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "althud",
@@ -159,7 +187,11 @@
 				"ALTHUD",
 				"althud"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "defbinds",
@@ -174,7 +206,11 @@
 				"DEFBINDS",
 				"defbinds"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "animdefs",
@@ -189,7 +225,11 @@
 				"ANIMDEFS",
 				"animdefs"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "cvarinfo",
@@ -204,7 +244,11 @@
 				"CVARINFO",
 				"cvarinfo"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "defcvars",
@@ -219,7 +263,11 @@
 				"DEFCVARS",
 				"defcvars"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "dmxgus",
@@ -234,7 +282,11 @@
 				"DMXGUS",
 				"dmxgus"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "fontdefs",
@@ -249,7 +301,11 @@
 				"FONTDEFS",
 				"fontdefs"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "gameinfo",
@@ -264,7 +320,11 @@
 				"GAMEINFO",
 				"gameinfo"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "gldefs",
@@ -279,7 +339,11 @@
 				"GLDEFS",
 				"gldefs"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "iwadinfo",
@@ -294,7 +358,11 @@
 				"IWADINFO",
 				"iwadinfo"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "keyconf",
@@ -309,7 +377,11 @@
 				"KEYCONF",
 				"keyconf"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "language",
@@ -324,7 +396,11 @@
 				"LANGUAGE",
 				"language"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "modeldef",
@@ -339,7 +415,11 @@
 				"MODELDEF",
 				"modeldef"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "musinfo",
@@ -354,7 +434,11 @@
 				"MUSINFO",
 				"musinfo"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "palvers",
@@ -369,7 +453,11 @@
 				"PALVERS",
 				"palvers"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "reverbs",
@@ -384,7 +472,11 @@
 				"REVERBS",
 				"reverbs"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "s_skin",
@@ -399,7 +491,11 @@
 				"S_SKIN",
 				"s_skin"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "xhairs",
@@ -414,7 +510,11 @@
 				"XHAIRS",
 				"xhairs"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "x11r6rgb",
@@ -429,7 +529,11 @@
 				"X11R6RGB",
 				"x11r6rgb"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "trnslate",
@@ -444,7 +548,11 @@
 				"TRNSLATE",
 				"trnslate"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "voxeldef",
@@ -459,7 +567,11 @@
 				"VOXELDEF",
 				"voxeldef"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "textcolo",
@@ -474,7 +586,11 @@
 				"TEXTCOLO",
 				"textcolo"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "teaminfo",
@@ -489,7 +605,11 @@
 				"TEAMINFO",
 				"teaminfo"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "terrain",
@@ -504,7 +624,11 @@
 				"TERRAIN",
 				"terrain"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "secrets",
@@ -519,7 +643,11 @@
 				"SECRETS",
 				"secrets"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "sbarinfo",
@@ -534,7 +662,11 @@
 				"SBARINFO",
 				"sbarinfo"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "sndinfo",
@@ -549,7 +681,11 @@
 				"SNDINFO",
 				"sndinfo"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "textures",
@@ -564,7 +700,11 @@
 				"TEXTURES",
 				"textures"
 			],
-			"configuration": "./langs/mapinfo.cfg.json"
+			"configuration": "./langs/mapinfo.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		},
 		{
 			"id": "sndseq",
@@ -579,7 +719,11 @@
 				"SNDSEQ",
 				"sndseq"
 			],
-			"configuration": "./langs/simple.cfg.json"
+			"configuration": "./langs/simple.cfg.json",
+			"icon": {
+				"light": "./langs/zdoom.svg",
+				"dark": "./langs/zdoom.svg"
+			}
 		}
 	],
 	"configuration": {

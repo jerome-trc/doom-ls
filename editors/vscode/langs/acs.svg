@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="67.73333mm"
+   height="67.73333mm"
+   viewBox="0 0 67.733356 67.733332"
+   version="1.1"
+   id="svg8"
+   sodipodi:docname="acs.svg"
+   inkscape:version="1.1.2 (0a00cf5339, 2022-02-04)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <defs
+     id="defs2">
+    <rect
+       x="10.04727"
+       y="108.02505"
+       width="155.84657"
+       height="168.41825"
+       id="rect14745" />
+    <rect
+       x="4.8104858"
+       y="5.2259282"
+       width="246.1387"
+       height="242.4206"
+       id="rect4101" />
+  </defs>
+  <sodipodi:namedview
+     id="base"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageopacity="0.0"
+     inkscape:pageshadow="2"
+     inkscape:zoom="1.979899"
+     inkscape:cx="147.48227"
+     inkscape:cy="109.09647"
+     inkscape:document-units="mm"
+     inkscape:current-layer="svg8"
+     showgrid="false"
+     units="mm"
+     showguides="true"
+     inkscape:guide-bbox="true"
+     inkscape:window-width="1920"
+     inkscape:window-height="1012"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:pagecheckerboard="0">
+    <sodipodi:guide
+       position="47.36521,47.66003"
+       orientation="1,0"
+       id="guide888"
+       inkscape:locked="false" />
+  </sodipodi:namedview>
+  <metadata
+     id="metadata5">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <g
+     id="g28254"
+     style="fill:#ff7f2a"
+     transform="translate(-53.687097,1.4570865)">
+    <g
+       id="layer2"
+       inkscape:label="Circle"
+       style="display:inline;opacity:1;fill:#ff7f2a"
+       transform="translate(-17.446238,-116.09062)">
+      <circle
+         style="opacity:1;fill:#ff7f2a;fill-opacity:1;stroke:none;stroke-width:0.265;stroke-linecap:butt;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+         id="path881"
+         cx="105"
+         cy="148.5002"
+         r="33.866665" />
+    </g>
+  </g>
+  <text
+     xml:space="preserve"
+     transform="matrix(0.29047351,0,0,0.29047351,1.4794363,17.320654)"
+     id="text4099"
+     style="font-style:normal;font-weight:normal;font-size:96px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;white-space:pre;shape-inside:url(#rect4101);fill:#ffffff;fill-opacity:1;stroke:none"><tspan
+       x="4.8105469"
+       y="91.298141"
+       id="tspan29186"><tspan
+         style="font-family:'Arial Black';-inkscape-font-specification:'Arial Black, '"
+         id="tspan29184">ACS</tspan></tspan></text>
+</svg>
