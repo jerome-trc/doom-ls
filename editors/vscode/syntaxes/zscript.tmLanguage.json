@@ -1,0 +1,349 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "ZScript",
+    "patterns": [
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#keywords"
+        },
+        {
+            "include": "#blocks"
+        },
+        {
+            "include": "#strings"
+        },
+        {
+            "include": "#punctuation"
+        },
+        {
+            "include": "#directives"
+        },
+        {
+            "include": "#functions"
+        },
+        {
+            "include": "#types"
+        },
+        {
+            "include": "#variable"
+        },
+        {
+            "include": "#states"
+        }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.double-slash.zscript",
+                    "begin": "\\/\\/",
+                    "end": "$",
+                    "contentName": "comment.line.double-slash.text.zscript"
+                },
+                {
+                    "name": "comment.block.zscript",
+                    "begin": "\\/\\*",
+                    "end": "\\*\\/",
+                    "contentName": "comment.block.text.zscript"
+                }
+            ]
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.control.zscript",
+                    "match": "\\b(?i:if|else|for|return|do|while|switch|continue|break|case)\\b"
+                },
+                {
+                    "name": "keyword.operator.zscript",
+                    "match": "(?:-[-=]?|!=?|\\+[+=]?|~(?:==)?|\\*[*=]?|\\/=?|%=?|<(?:<|>?=)?|>(?:>(?:>|=)?|=)?|\\.\\.?|==?|&[&=]?|\\?|\\|[|=]?|\\^=?|::?)|\\b(?:alignof|sizeof|cross|dot|is)\\b"
+                },
+                {
+                    "name": "keyword.other.zscript",
+                    "match": "\\b(?i:abstract|action|clearscope|deprecated|final|native|override|play|private|protected|static|ui|vararg|virtual|virtualscope|abstract|replaces|readonly|extend|in|out|self)\\b"
+                }
+            ]
+        },
+        "strings": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.zscript",
+                    "begin": "(?<!\\\\)\"",
+                    "end": "(?<!\\\\)\""
+                },
+                {
+                    "name": "string.quoted.single.zscript",
+                    "begin": "(?<!\\\\)'",
+                    "end": "(?<!\\\\)'"
+                }
+            ]
+        },
+        "punctuation": {
+            "patterns": [
+                {
+                    "name": "punctuation.terminator.statement.zscript",
+                    "match": ";"
+                },
+                {
+                    "name": "punctuation.brackets.round.zscript",
+                    "match": "[()]"
+                },
+                {
+                    "name": "punctuation.brackets.square.zscript",
+                    "match": "[\\[\\]]"
+                },
+                {
+                    "name": "punctuation.brackets.curly.zscript",
+                    "match": "[{}]"
+                }
+            ]
+        },
+        "types": {
+            "patterns": [
+                {
+                    "match": "(\\d*?)(\\.)(\\d*?)",
+                    "captures": {
+                        "1": {
+                            "name": "constant.numeric.zscript"
+                        },
+                        "2": {
+                            "name": "constant.numeric.decimal.point.zscript"
+                        },
+                        "3": {
+                            "name": "constant.numeric.zscript"
+                        }
+                    }
+                },
+                {
+                    "name": "constant.numeric.zscript",
+                    "match": "\\b\\d+?\\b"
+                },
+                {
+                    "name": "constant.hexadecimal.zscript",
+                    "match": "\\b0[xX][0-9a-fA-F]+?\\b"
+                },
+                {
+                    "name": "storage.type.zscript",
+                    "match": "\\b(?i:null|void|class|array|bool|const|enum|struct|mixin)\\b|\\b(?<!\\.)[a-z0-9]+?(?=\\s(?!(?:alignof|sizeof|cross|dot|is|true|false))(?:\\w+?))|\\b[a-z0-9]\\w*?(?=\\s+?\\w+?\\()\\b"
+                },
+                {
+                    "name": "constant.zscript",
+                    "match": "\\b[A-Z_0-9]+?\\b"
+                },
+                {
+                    "name": "constant.language.boolean.zscript",
+                    "match": "\\b(?i:true|false)\\b"
+                }
+            ]
+        },
+        "directives": {
+            "patterns": [
+                {
+                    "name": "keyword.control.include.zscript",
+                    "match": "^\\#include\\b"
+                },
+                {
+                    "name": "keyword.control.directive.zscript",
+                    "match": "\\b(?i:version|default|states)\\b"
+                }
+            ]
+        },
+        "functions": {
+            "name": "entity.name.function.zscript",
+            "match": "\\w+?(?=\\s*?\\()"
+        },
+        "blocks": {
+            "patterns": [
+                {
+                    "name": "entity.name.class.zscript",
+                    "match": "(?<=\\bclass\\s+?)\\w+?\\b|(?<=\\bclass[<]\\s*?)\\w+?(?=\\s*?[>])"
+                },
+                {
+                    "name": "entity.name.class.property.zscript",
+                    "match": "(?i)(?<=property\\s+?)\\w+?\\b"
+                },
+                {
+                    "name": "entity.name.class.enum.zscript",
+                    "match": "(?i)(?<=enum\\s+?)\\w+?\\b"
+                },
+                {
+                    "name": "entity.name.class.struct.zscript",
+                    "match": "(?i)(?<=struct\\s+?)\\w+?\\b"
+                },
+                {
+                    "name": "entity.name.class.dynamic.array.zscript",
+                    "begin": "(?i)(?<=array<)",
+                    "end": "(?=(?<![^<]\\W+?)[>])",
+                    "patterns": [
+                        {
+                            "name": "storage.type.class.zscript",
+                            "match": "(?i)\\bclass\\b"
+                        },
+                        {
+                            "name": "keyword.operator.angle.brackets.zscript",
+                            "match": "[<>]"
+                        }
+                    ]
+                }
+            ]
+        },
+        "variable": {
+            "patterns": [
+                {
+                    "name": "variable.property.zscript",
+                    "match": "(?<=\\w+?[\\[\\]]??\\.)\\w+?\\b"
+                },
+                {
+                    "name": "entity.name.class.object.zscript",
+                    "match": "\\b[A-Z0-9]\\w*?\\b"
+                },
+                {
+                    "name": "variable.other.readwrite.zscript",
+                    "match": "\\b[a-z0-9]\\w*?(?:\\[.*?\\])??\\b"
+                }
+            ]
+        },
+        "states": {
+            "patterns": [
+                {
+                    "name": "entity.other.default.block.zscript",
+                    "begin": "(?i)(?<=^\\s*?\\bdefault\\b)",
+                    "end": "(?=})",
+                    "patterns": [
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "begin": "(?<=[\\+\\-])",
+                            "end": "(?=$|;)",
+                            "patterns": [
+                                {
+                                    "match": "\\b(\\w+?)\\b\\s*?(?=\\.)",
+                                    "captures": {
+                                        "1": {
+                                            "name": "entity.name.class.zscript"
+                                        }
+                                    }
+                                },
+                                {
+                                    "match": "\\b(\\w+?)\\b",
+                                    "captures": {
+                                        "1": {
+                                            "name": "entity.name.tag.attribute.zscript"
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "include": "#types"
+                        },
+                        {
+                            "include": "#strings"
+                        },
+                        {
+                            "include": "#punctuation"
+                        },
+                        {
+                            "include": "#keywords"
+                        },
+                        {
+                            "match": "\\b(\\w+?)\\b\\s*?(?=\\.)",
+                            "captures": {
+                                "1": {
+                                    "name": "entity.name.class.zscript"
+                                }
+                            }
+                        },
+                        {
+                            "match": "\\b(\\w+?)\\b",
+                            "captures": {
+                                "1": {
+                                    "name": "variable.property.zscript"
+                                }
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "entity.other.states.block.zscript",
+                    "begin": "(?i)(?<=^\\s*?\\bstates\\b)",
+                    "end": "(?=})",
+                    "patterns": [
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "include": "#punctuation"
+                        },
+                        {
+                            "include": "#strings"
+                        },
+                        {
+                            "include": "#keywords"
+                        },
+                        {
+                            "include": "#functions"
+                        },
+                        {
+                            "name": "entity.name.class.state.zscript",
+                            "match": "\\b\\w+?(?=:$)"
+                        },
+                        {
+                            "name": "entity.name.class.state.zscript",
+                            "match": "(?i)(?<=\\bgoto\\b\\s+?)\\w+?\\b"
+                        },
+                        {
+                            "name": "keyword.states.zscript",
+                            "match": "(?i)\\b(?:bright|canraise|fast|light|nodelay|offset|slow)\\b"
+                        },
+                        {
+                            "name": "keyword.control.states.zscript",
+                            "match": "(?i)\\b(?:loop|stop|wait|fail|goto)\\b"
+                        },
+                        {
+                            "name": "entity.name.function.zscript",
+                            "match": "A_\\w+?\\b"
+                        },
+                        {
+                            "include": "#types"
+                        },
+                        {
+                            "name": "variable.other.zscript",
+                            "match": "\\b\\w+?\\b"
+                        }
+                    ]
+                },
+                {
+                    "name": "entity.other.enum.zscript",
+                    "begin": "(?<=enum\\s\\w+?\\s$)",
+                    "end": "}",
+                    "patterns": [
+                        {
+                            "name": "constant.enum.value.zscript",
+                            "match": "\\b\\w+?\\b"
+                        },
+                        {
+                            "include": "#punctuation"
+                        },
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "include": "#keywords"
+                        },
+                        {
+                            "include": "#strings"
+                        },
+                        {
+                            "include": "#types"
+                        }
+                    ]
+                }
+            ]
+        }
+    },
+    "scopeName": "source.zscript"
+}

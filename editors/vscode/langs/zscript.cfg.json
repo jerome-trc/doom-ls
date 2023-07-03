@@ -36,26 +36,12 @@
         }
     ],
     "surroundingPairs": [
-        {
-            "open": "{",
-            "close": "}"
-        },
-        {
-            "open": "[",
-            "close": "]"
-        },
-        {
-            "open": "(",
-            "close": ")"
-        },
-        {
-            "open": "\"",
-            "close": "\""
-        },
-        {
-            "open": "'",
-            "close": "'"
-        }
+		["{", "}"],
+        ["[", "]"],
+        ["(", ")"],
+        ["<", ">"],
+        ["\"", "\""],
+        ["'", "'"]
     ],
     "indentationRules": {
         "increaseIndentPattern": "[{}]"
