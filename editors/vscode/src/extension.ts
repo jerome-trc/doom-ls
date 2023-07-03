@@ -5,18 +5,17 @@ import {
 	LanguageClient,
 	LanguageClientOptions,
 	ServerOptions,
-	TransportKind
 } from 'vscode-languageclient/node';
 
 let client: LanguageClient | null = null;
 
-const channel = vscode.window.createOutputChannel("DoomLSP Client")
+const channel = vscode.window.createOutputChannel("DoomLS Client")
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export async function activate(ctx: vscode.ExtensionContext) {
-	channel.appendLine("(DoomLSP) Client initializing...");
-	const cfg = vscode.workspace.getConfiguration("doomlsp");
+	channel.appendLine("(DoomLS) Client initializing...");
+	const cfg = vscode.workspace.getConfiguration("doomls");
 
 	if (!cfg.get("server.enable") || client !== null) {
 		return;
@@ -26,7 +25,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 }
 
 async function start_server(ctx: vscode.ExtensionContext) {
-	vscode.window.showInformationMessage('(DoomLSP) Server starting...');
+	vscode.window.showInformationMessage('(DoomLS) Server starting...');
 
 	if (client !== null) {
 		return;
@@ -38,7 +37,7 @@ async function start_server(ctx: vscode.ExtensionContext) {
 	const initOpts = {};
 
 	const serverOpts: ServerOptions = {
-		command: ctx.asAbsolutePath(path.join("out", `doom-lsp${ext}`))
+		command: ctx.asAbsolutePath(path.join("out", `doom-ls${ext}`))
 	};
 
 	const clientOpts: LanguageClientOptions = {
@@ -46,12 +45,12 @@ async function start_server(ctx: vscode.ExtensionContext) {
 		initializationOptions: initOpts,
 	};
 
-	client = new LanguageClient("doomlsp", serverOpts, clientOpts);
+	client = new LanguageClient("doomls", serverOpts, clientOpts);
 	await client.start();
 }
 
 export async function deactivate() {
-	channel.appendLine("(DoomLSP) Client shutting down...")
+	channel.appendLine("(DoomLS) Client shutting down...")
 
 	if (client === null) {
 		return;

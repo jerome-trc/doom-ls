@@ -1,7 +1,7 @@
 {
-  "name": "doomlsp",
-  "displayName": "DoomLSP",
-  "description": "DoomLSP client; provides Doom DSL support",
+  "name": "doomls",
+  "displayName": "DoomLS",
+  "description": "DoomLS client; provides Doom DSL support.",
   "version": "0.0.1",
   "author": "jerome-trc",
   "publisher": "jerome-trc",
@@ -11,12 +11,12 @@
   },
   "repository": {
 	"type": "git",
-	"url": "https://github.com/jerome-trc/doom-lsp"
+	"url": "https://github.com/jerome-trc/doom-ls"
   },
   "bugs": {
-	"url": "https://github.com/jerome-trc/doom-lsp/issues"
+	"url": "https://github.com/jerome-trc/doom-ls/issues"
   },
-  "homepage": "https://github.com/jerome-trc/doom-lsp",
+  "homepage": "https://github.com/jerome-trc/doom-ls",
   "keywords": [
 	"doom"
   ],
@@ -584,9 +584,9 @@
 	],
 	"configuration": {
 		"type": "object",
-		"title": "DoomLSP",
+		"title": "DoomLS",
 		"properties": {
-			"doomlsp.server.enable": {
+			"doomls.server.enable": {
 				"type": "boolean",
 				"default": true,
 				"markdownDescription": "Enable the language server."

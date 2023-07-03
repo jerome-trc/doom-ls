@@ -63,7 +63,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "doom-lsp"
+name = "doom-ls"
 version = "0.0.0"
 dependencies = [
  "doomfront",

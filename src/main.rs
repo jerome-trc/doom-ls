@@ -1,4 +1,4 @@
-//! # DoomLSP
+//! # DoomLS
 //!
 //! A language server covering domain-specific languages written for Doom's source ports.
 

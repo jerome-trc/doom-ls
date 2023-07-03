@@ -1,15 +1,15 @@
 [package]
-name = "doom-lsp"
+name = "doom-ls"
 version = "0.0.0"
 edition = "2021"
 
 authors = ["jerome-trc"]
 description = "Language server for Doom DSLs"
-homepage = "https://github.com/jerome-trc/doom-lsp/"
-keywords = ["doom", "ide", "lsp"]
+homepage = "https://github.com/jerome-trc/doom-ls/"
+keywords = ["doom", "ide", "language-server", "lsp"]
 license = "MIT OR Apache-2.0"
 publish = false
-repository = "https://github.com/jerome-trc/doom-lsp/"
+repository = "https://github.com/jerome-trc/doom-ls/"
 
 [dependencies]
 doomfront = { path = "../viletech/doomfront", features = [
