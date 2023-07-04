@@ -72,7 +72,7 @@ fn try_file(db: &dyn Compiler, key: Box<Path>) -> Option<GreenFileKey> {
 	let ret = db.intern_file(GreenFile {
 		lang: source.lang,
 		root,
-		lndx: source.lndx.clone(),
+		lndx: source.lndx,
 	});
 
 	Some(ret)
