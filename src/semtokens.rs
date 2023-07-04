@@ -9,14 +9,12 @@ use crate::lines::LineIndex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SemToken {
-	Class,
 	Comment,
 	Constant,
 	Enum,
 	Function,
 	Keyword,
 	Method,
-	Modifier,
 	Number,
 	Operator,
 	Param,
@@ -25,20 +23,17 @@ pub(crate) enum SemToken {
 	Struct,
 	Type,
 	TypeParam,
-	Variable,
 }
 
 impl From<SemToken> for SemanticTokenType {
 	fn from(value: SemToken) -> Self {
 		match value {
-			SemToken::Class => Self::CLASS,
 			SemToken::Comment => Self::COMMENT,
 			SemToken::Constant => Self::ENUM_MEMBER,
 			SemToken::Enum => Self::ENUM,
 			SemToken::Function => Self::FUNCTION,
 			SemToken::Keyword => Self::KEYWORD,
 			SemToken::Method => Self::METHOD,
-			SemToken::Modifier => Self::MODIFIER,
 			SemToken::Number => Self::NUMBER,
 			SemToken::Operator => Self::OPERATOR,
 			SemToken::Param => Self::PARAMETER,
@@ -47,7 +42,6 @@ impl From<SemToken> for SemanticTokenType {
 			SemToken::Struct => Self::STRUCT,
 			SemToken::Type => Self::TYPE,
 			SemToken::TypeParam => Self::TYPE_PARAMETER,
-			SemToken::Variable => Self::VARIABLE,
 		}
 	}
 }
@@ -57,6 +51,7 @@ bitflags::bitflags! {
 	pub(crate) struct SemTokenFlags: u32 {
 		const DEPRECATED = 1 << 0;
 		const READONLY = 1 << 1;
+		const CONTROL_FLOW = 1 << 2;
 	}
 }
 
@@ -78,12 +73,7 @@ impl Highlighter {
 		}
 	}
 
-	pub(crate) fn _advance_mod(
-		&mut self,
-		semtok: SemToken,
-		range: TextRange,
-		flags: SemTokenFlags,
-	) {
+	pub(crate) fn advance_mod(&mut self, semtok: SemToken, range: TextRange, flags: SemTokenFlags) {
 		self.advance_impl(semtok, range, flags.bits());
 	}
 
@@ -120,14 +110,12 @@ impl Highlighter {
 pub(crate) fn legend() -> SemanticTokensLegend {
 	// Ordering must match that of `SemToken`.
 	let types = vec![
-		SemToken::Class.into(),
 		SemToken::Comment.into(),
 		SemToken::Constant.into(),
 		SemToken::Enum.into(),
 		SemToken::Function.into(),
 		SemToken::Keyword.into(),
 		SemToken::Method.into(),
-		SemToken::Modifier.into(),
 		SemToken::Number.into(),
 		SemToken::Operator.into(),
 		SemToken::Param.into(),
@@ -136,12 +124,12 @@ pub(crate) fn legend() -> SemanticTokensLegend {
 		SemToken::Struct.into(),
 		SemToken::Type.into(),
 		SemToken::TypeParam.into(),
-		SemToken::Variable.into(),
 	];
 
 	let modifiers = vec![
 		SemanticTokenModifier::DEPRECATED,
 		SemanticTokenModifier::READONLY,
+		SemanticTokenModifier::new("controlFlow"),
 	];
 
 	SemanticTokensLegend {

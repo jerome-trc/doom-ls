@@ -5,7 +5,7 @@ use doomfront::{
 	zdoom::zscript::{Syn, SyntaxElem, SyntaxNode, SyntaxToken},
 };
 
-use crate::semtokens::{Highlighter, SemToken};
+use crate::semtokens::{Highlighter, SemToken, SemTokenFlags};
 
 pub(crate) struct Context {
 	pub(crate) hl: Highlighter,
@@ -23,6 +23,7 @@ pub(super) fn traverse(ctx: &mut Context, cursor: SyntaxNode) {
 		Function,
 		Super,
 		Type,
+		/// Maps to [`SemToken::Property`].
 		Var,
 	}
 
@@ -51,16 +52,20 @@ pub(super) fn traverse(ctx: &mut Context, cursor: SyntaxNode) {
 							IdentMode::Var => {
 								// TODO: Semantically-aware identifier highlighting.
 								if !token.text().eq_ignore_ascii_case("self") {
-									ctx.hl.advance(SemToken::Variable, range);
+									ctx.hl.advance(SemToken::Property, range);
 								} else {
-									ctx.hl.advance(SemToken::Modifier, range);
+									ctx.hl.advance(SemToken::Keyword, range);
 								}
 							}
 							IdentMode::Super => {
-								ctx.hl.advance(SemToken::Modifier, range);
+								ctx.hl.advance(SemToken::Keyword, range);
 							}
 							IdentMode::Control => {
-								ctx.hl.advance(SemToken::Keyword, range);
+								ctx.hl.advance_mod(
+									SemToken::Keyword,
+									range,
+									SemTokenFlags::CONTROL_FLOW,
+								);
 							}
 							IdentMode::Constant => {
 								ctx.hl.advance(SemToken::Constant, range);
@@ -84,7 +89,7 @@ pub(super) fn traverse(ctx: &mut Context, cursor: SyntaxNode) {
 					| Syn::PropertyDef
 					| Syn::PropertySetting
 					| Syn::MemberExpr
-					| Syn::IdentExpr => {
+					| Syn::LocalVar => {
 						ident_mode.push(IdentMode::Var);
 					}
 					Syn::FunctionDecl | Syn::ActionFunction | Syn::CallExpr => {
@@ -123,7 +128,7 @@ pub(super) fn traverse(ctx: &mut Context, cursor: SyntaxNode) {
 					| Syn::PropertyDef
 					| Syn::PropertySetting
 					| Syn::MemberExpr
-					| Syn::IdentExpr => {
+					| Syn::LocalVar => {
 						let _ = ident_mode.pop();
 					}
 					Syn::FunctionDecl | Syn::ActionFunction | Syn::CallExpr => {
@@ -172,7 +177,9 @@ fn highlight_token(ctx: &mut Context, token: &SyntaxToken, operator: bool) {
 			| Syn::KwUntil
 			| Syn::KwVersion
 			| Syn::KwWait
-			| Syn::KwWhile => ctx.hl.advance(SemToken::Keyword, range),
+			| Syn::KwWhile => ctx
+				.hl
+				.advance_mod(SemToken::Keyword, range, SemTokenFlags::CONTROL_FLOW),
 			Syn::KwAbstract
 			| Syn::KwAction
 			| Syn::KwArray
@@ -247,7 +254,7 @@ fn highlight_token(ctx: &mut Context, token: &SyntaxToken, operator: bool) {
 			| Syn::KwVirtualScope
 			| Syn::KwVoid
 			| Syn::KwAuto
-			| Syn::KwVolatile => ctx.hl.advance(SemToken::Modifier, range),
+			| Syn::KwVolatile => ctx.hl.advance(SemToken::Keyword, range),
 			Syn::KwAlignOf | Syn::KwCross | Syn::KwDot | Syn::KwIs | Syn::KwSizeOf => {
 				ctx.hl.advance(SemToken::Operator, range)
 			}
@@ -276,9 +283,10 @@ fn highlight_token(ctx: &mut Context, token: &SyntaxToken, operator: bool) {
 	match syn {
 		Syn::IntLit | Syn::FloatLit => ctx.hl.advance(SemToken::Number, range),
 		Syn::StringLit | Syn::NameLit => ctx.hl.advance(SemToken::String, range),
-		Syn::NullLit => ctx.hl.advance(SemToken::Modifier, range),
+		Syn::NullLit => ctx.hl.advance(SemToken::Keyword, range),
 		Syn::PoundInclude | Syn::RegionStart | Syn::RegionEnd => {
-			ctx.hl.advance(SemToken::Keyword, range)
+			ctx.hl
+				.advance_mod(SemToken::Keyword, range, SemTokenFlags::CONTROL_FLOW)
 		}
 		Syn::Comment | Syn::DocComment => ctx.hl.advance(SemToken::Comment, range),
 		// Whitespace, unknown, state sprites, state frames, or previously handled.
