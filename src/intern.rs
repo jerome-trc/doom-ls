@@ -1,13 +1,19 @@
-//! The interner part of DoomLS' incremental compiler and the things its stores.
+//! The interner part of DoomLS' incremental compiler and the values it stores.
 
-use std::sync::Arc;
+use std::{
+	hash::{Hash, Hasher},
+	sync::Arc,
+};
 
 use doomfront::{
-	rowan::{GreenNode, SyntaxNode, SyntaxToken, TextSize},
+	rowan::{GreenNode, SyntaxNode, SyntaxToken},
 	LangExt,
 };
 
-use crate::LangId;
+use crate::{
+	lines::{LineCol, LineIndex},
+	LangId,
+};
 
 #[salsa::query_group(InternerDatabase)]
 pub(crate) trait Interner {
@@ -17,13 +23,19 @@ pub(crate) trait Interner {
 
 // Values //////////////////////////////////////////////////////////////////////
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GreenFile {
 	pub(crate) lang: LangId,
 	pub(crate) root: GreenNode,
-	/// Byte offset of the beginning of each line
-	/// (except the first, which always has offset 0).
-	pub(crate) newlines: Arc<[TextSize]>,
+	pub(crate) lndx: Arc<LineIndex>,
+}
+
+impl Hash for GreenFile {
+	fn hash<H: Hasher>(&self, state: &mut H) {
+		self.lang.hash(state);
+		self.root.hash(state);
+		Arc::as_ptr(&self.lndx).hash(state);
+	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,22 +54,52 @@ impl salsa::InternKey for GreenFileKey {
 impl GreenFile {
 	#[must_use]
 	pub(crate) fn token_at<L: LangExt>(&self, pos: lsp_types::Position) -> Option<SyntaxToken<L>> {
-		let ix_line = pos.line as usize;
-
-		let file_start_offs = if ix_line != 0 {
-			match self.newlines.get(ix_line - 1) {
-				Some(n) => *n,
-				None => return None,
-			}
-		} else {
-			TextSize::from(0)
+		let linecol = LineCol {
+			line: pos.line,
+			col: pos.character,
 		};
 
-		let line_start_offs = TextSize::from(pos.character);
-		let cursor = SyntaxNode::<L>::new_root(self.root.clone());
+		let Some(offs) = self.lndx.offset(linecol) else { return None; };
 
-		cursor
-			.token_at_offset(file_start_offs + line_start_offs)
+		SyntaxNode::<L>::new_root(self.root.clone())
+			.token_at_offset(offs)
 			.next()
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use doomfront::zdoom::zscript;
+	use lsp_types::Position;
+
+	use super::*;
+
+	#[test]
+	fn smoke_token_at() {
+		const SOURCE: &str = r##"const SOMETHING = 2.0f * 1.0f;
+const SOMETHING = 1.0f * 2.0f;
+
+struct Something {}
+"##;
+
+		let gfile = GreenFile {
+			lang: LangId::ZScript,
+			root: doomfront::parse(
+				SOURCE,
+				doomfront::zdoom::zscript::parse::file,
+				doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
+			)
+			.into_inner(),
+			lndx: Arc::new(LineIndex::new(SOURCE)),
+		};
+
+		let t = gfile
+			.token_at::<zscript::Syn>(Position {
+				line: 3,
+				character: 3,
+			})
+			.unwrap();
+
+		assert_eq!(t.kind(), zscript::Syn::KwStruct);
 	}
 }

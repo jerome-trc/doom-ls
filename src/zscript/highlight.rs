@@ -285,28 +285,3 @@ fn highlight_token(ctx: &mut Context, token: &SyntaxToken, operator: bool) {
 		_ => {}
 	}
 }
-
-#[cfg(test)]
-mod test {
-	use doomfront::zdoom::zscript::ParseTree;
-
-	use super::*;
-
-	#[test]
-	fn smoke() {
-		const SOURCE: &str = r##""##; // TODO: need some test data...
-
-		let newlines = crate::scan::compute_newlines(SOURCE).into();
-		let mut ctx = Context {
-			hl: Highlighter::new(newlines),
-		};
-
-		let ptree: ParseTree = doomfront::parse(
-			SOURCE,
-			doomfront::zdoom::zscript::parse::file,
-			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
-		);
-
-		traverse(&mut ctx, ptree.cursor());
-	}
-}

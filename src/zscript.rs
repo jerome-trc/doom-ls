@@ -90,7 +90,7 @@ impl Core {
 		let cursor = SyntaxNode::new_root(gfile.root);
 
 		let mut context = highlight::Context {
-			hl: Highlighter::new(gfile.newlines),
+			hl: Highlighter::new(gfile.lndx),
 		};
 
 		highlight::traverse(&mut context, cursor);

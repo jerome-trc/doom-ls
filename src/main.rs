@@ -5,16 +5,17 @@
 // Common //////////////////////////////////////////////////////////////////////
 mod db;
 mod intern;
-mod scan;
+mod lines;
 mod semtokens;
 mod util;
 // Languages ///////////////////////////////////////////////////////////////////
 mod zscript;
 
-use std::ops::ControlFlow;
+use std::{ops::ControlFlow, sync::Arc};
 
 use db::Source;
 use intern::Interner;
+use lines::LineIndex;
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
 	notification::{DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument},
@@ -23,9 +24,9 @@ use lsp_types::{
 	},
 	FileChangeType, GotoDefinitionResponse, HoverProviderCapability, InitializeParams, OneOf,
 	SaveOptions, SemanticTokensFullOptions, SemanticTokensOptions,
-	SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentContentChangeEvent,
-	TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-	TextDocumentSyncSaveOptions, WorkDoneProgressOptions,
+	SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
+	TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
+	WorkDoneProgressOptions,
 };
 use tracing::{error, info};
 use tracing_subscriber::{
@@ -210,26 +211,29 @@ impl Core {
 	}
 
 	fn handle_notif(&mut self, mut notif: Notification) -> ControlFlow<UnitResult, Notification> {
-		notif = Self::try_notif::<DidChangeTextDocument, _>(notif, |mut params| {
+		notif = Self::try_notif::<DidChangeTextDocument, _>(notif, |params| {
 			let path = util::uri_to_pathbuf(&params.text_document.uri)?.into_boxed_path();
-			let Some(gfile_k) = self.db.try_file(path.clone()) else { return Ok(()); };
-			let gfile = self.db.lookup_intern_file(gfile_k);
 
-			// TODO: Only re-parse as much as necessary.
-			let text = match params.content_changes.pop() {
-				Some(TextDocumentContentChangeEvent {
-					range: None,
-					range_length: None,
-					text,
-				}) => text,
-				_ => std::fs::read_to_string(&path)?,
+			let lang = match self.db.try_file(path.clone()) {
+				Some(k) => self.db.lookup_intern_file(k).lang,
+				None => LangId::Unknown,
 			};
+
+			let mut new_text = self.db.source(path.clone()).text.to_string();
+
+			lines::splice_changes(&mut new_text, params.content_changes);
+			let lndx = Arc::new(LineIndex::new(&new_text));
+
+			// TODO:
+			// - Prevent needing to re-parse the entire file.
+			// - Try reducing how many times the line index needs to be recomputed.
 
 			self.db.set_source(
 				path,
 				Source {
-					text: text.into(),
-					lang: gfile.lang,
+					text: new_text.into(),
+					lang,
+					lndx,
 				},
 			);
 
@@ -243,12 +247,14 @@ impl Core {
 			};
 
 			let src_key = util::uri_to_pathbuf(&params.text_document.uri)?.into_boxed_path();
+			let lndx = Arc::new(LineIndex::new(&params.text_document.text));
 
 			self.db.set_source(
 				src_key,
 				Source {
 					text: params.text_document.text.into(),
 					lang: lang_id,
+					lndx,
 				},
 			);
 
@@ -260,14 +266,31 @@ impl Core {
 				let path = util::uri_to_pathbuf(&change.uri)?.into_boxed_path();
 
 				match change.typ {
-					FileChangeType::CHANGED | FileChangeType::CREATED => {
-						let text = std::fs::read_to_string(&path)?.into();
+					FileChangeType::CHANGED => {
+						let Some(gfile_k) = self.db.try_file(path.clone()) else { continue; };
+						let gfile = self.db.lookup_intern_file(gfile_k);
+						let text = std::fs::read_to_string(&path)?;
+						let lndx = Arc::new(LineIndex::new(&text));
 
 						self.db.set_source(
 							path,
 							Source {
-								text,
+								text: text.into(),
+								lang: gfile.lang,
+								lndx,
+							},
+						);
+					}
+					FileChangeType::CREATED => {
+						let text = std::fs::read_to_string(&path)?;
+						let lndx = Arc::new(LineIndex::new(&text));
+
+						self.db.set_source(
+							path,
+							Source {
+								text: text.into(),
 								lang: LangId::Unknown,
+								lndx,
 							},
 						);
 					}

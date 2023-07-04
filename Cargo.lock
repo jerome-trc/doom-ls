@@ -76,6 +76,7 @@ dependencies = [
  "doomfront",
  "lsp-server",
  "lsp-types",
+ "nohash-hasher",
  "rustc-hash",
  "salsa",
  "serde",
@@ -269,6 +270,12 @@ checksum = "d61c719bcfbcf5d62b3a09efa6088de8c54bc0bfcd3ea7ae39fcc186108b8de1"
 dependencies = [
  "autocfg",
 ]
+
+[[package]]
+name = "nohash-hasher"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 
 [[package]]
 name = "nu-ansi-term"

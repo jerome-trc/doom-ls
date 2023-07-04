@@ -1,10 +1,14 @@
 //! The core of DoomLS' incremental compiler.
 
-use std::{path::Path, sync::Arc};
+use std::{
+	hash::{Hash, Hasher},
+	path::Path,
+	sync::Arc,
+};
 
 use crate::{
 	intern::{GreenFile, GreenFileKey, Interner, InternerDatabase},
-	scan::compute_newlines,
+	lines::LineIndex,
 	LangId,
 };
 
@@ -24,10 +28,19 @@ pub(crate) trait Compiler: Interner {
 	fn try_file(&self, key: Box<Path>) -> Option<GreenFileKey>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Source {
-	pub(crate) text: Arc<str>,
 	pub(crate) lang: LangId,
+	pub(crate) text: Arc<str>,
+	pub(crate) lndx: Arc<LineIndex>,
+}
+
+impl Hash for Source {
+	fn hash<H: Hasher>(&self, state: &mut H) {
+		self.lang.hash(state);
+		Arc::as_ptr(&self.text).hash(state);
+		Arc::as_ptr(&self.lndx).hash(state);
+	}
 }
 
 #[must_use]
@@ -40,6 +53,7 @@ fn try_file(db: &dyn Compiler, key: Box<Path>) -> Option<GreenFileKey> {
 	};
 
 	let lex_ctx = if let LangId::ZScript = source.lang {
+		// TODO: Per-folder user config for ZScript version.
 		doomfront::zdoom::lex::Context::ZSCRIPT_LATEST
 	} else {
 		doomfront::zdoom::lex::Context::NON_ZSCRIPT
@@ -52,13 +66,13 @@ fn try_file(db: &dyn Compiler, key: Box<Path>) -> Option<GreenFileKey> {
 			lex_ctx,
 		)
 		.into_inner(),
-		LangId::Unknown => return None,
+		LangId::Unknown => unreachable!(),
 	};
 
 	let ret = db.intern_file(GreenFile {
 		lang: source.lang,
 		root,
-		newlines: compute_newlines(source.text.as_ref()).into(),
+		lndx: source.lndx.clone(),
 	});
 
 	Some(ret)

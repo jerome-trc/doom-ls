@@ -2,8 +2,10 @@
 
 use std::sync::Arc;
 
-use doomfront::rowan::{TextRange, TextSize};
+use doomfront::rowan::TextRange;
 use lsp_types::{SemanticTokenModifier, SemanticTokenType, SemanticTokensLegend};
+
+use crate::lines::LineIndex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SemToken {
@@ -59,20 +61,20 @@ bitflags::bitflags! {
 }
 
 pub(crate) struct Highlighter {
-	pub(crate) newlines: Arc<[TextSize]>,
+	pub(crate) lndx: Arc<LineIndex>,
 	pub(crate) tokens: Vec<lsp_types::SemanticToken>,
-	pub(crate) cur_line: u32,
-	pub(crate) cur_char: u32,
+	pub(crate) prev_line: u32,
+	pub(crate) prev_col: u32,
 }
 
 impl Highlighter {
 	#[must_use]
-	pub(crate) fn new(newlines: Arc<[TextSize]>) -> Self {
+	pub(crate) fn new(lndx: Arc<LineIndex>) -> Self {
 		Self {
-			newlines,
+			lndx,
 			tokens: vec![],
-			cur_line: 0,
-			cur_char: 0,
+			prev_line: 0,
+			prev_col: 0,
 		}
 	}
 
@@ -90,42 +92,27 @@ impl Highlighter {
 	}
 
 	fn advance_impl(&mut self, semtok: SemToken, range: TextRange, bits: u32) {
-		let mut l = self.cur_line;
-		let mut loffs = 0_u32;
+		let linecol = self.lndx.line_col(range.start());
+		let mut c = linecol;
 
-		while let Some(&newline) = self.newlines.get(l as usize) {
-			if newline < range.start() {
-				l += 1;
-			} else {
-				break;
+		if !self.tokens.is_empty() {
+			c.line -= self.prev_line;
+
+			if c.line == 0 {
+				c.col -= self.prev_col;
 			}
-
-			loffs = newline.into();
 		}
 
-		let ladv = l > self.cur_line;
-		let start_char = u32::from(range.start()) - loffs;
-
 		self.tokens.push(lsp_types::SemanticToken {
-			delta_line: {
-				let dl = l - self.cur_line;
-				self.cur_line = l;
-				dl
-			},
-			delta_start: {
-				if ladv {
-					self.cur_char = start_char;
-					start_char
-				} else {
-					let ds = start_char - self.cur_char;
-					self.cur_char = start_char;
-					ds
-				}
-			},
+			delta_line: c.line,
+			delta_start: c.col,
 			length: range.len().into(),
 			token_type: semtok as u32,
 			token_modifiers_bitset: bits,
 		});
+
+		self.prev_line = linecol.line;
+		self.prev_col = linecol.col;
 	}
 }
 
