@@ -45,7 +45,13 @@ async function start_server(ctx: vscode.ExtensionContext) {
 		initializationOptions: initOpts,
 	};
 
-	client = new LanguageClient("doomls", serverOpts, clientOpts);
+	client = new LanguageClient(
+		"doomls",
+		"DoomLS",
+		serverOpts,
+		clientOpts,
+	);
+
 	await client.start();
 }
 
