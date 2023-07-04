@@ -18,7 +18,9 @@ use intern::Interner;
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
 	notification::{DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument},
-	request::{GotoDefinition, HoverRequest, SemanticTokensFullRequest},
+	request::{
+		GotoDefinition, HoverRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
+	},
 	FileChangeType, GotoDefinitionResponse, HoverProviderCapability, InitializeParams, OneOf,
 	SaveOptions, SemanticTokensFullOptions, SemanticTokensOptions,
 	SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentContentChangeEvent,
@@ -82,7 +84,7 @@ fn capabilities() -> ServerCapabilities {
 			SemanticTokensOptions {
 				work_done_progress_options: WorkDoneProgressOptions::default(),
 				legend: semtokens::legend(),
-				range: Some(false), // TODO: Support this.
+				range: Some(true), // TODO: Support this.
 				full: Some(SemanticTokensFullOptions::Bool(true)),
 			},
 		)),
@@ -138,18 +140,21 @@ impl Core {
 		conn: &Connection,
 		mut req: Request,
 	) -> ControlFlow<UnitResult, Request> {
-		req = Self::try_request::<GotoDefinition, _>(req, |id, _params| {
-			let result = Some(GotoDefinitionResponse::Array(vec![]));
-			let result = serde_json::to_value(result)?;
+		req = Self::try_request::<SemanticTokensRangeRequest, _>(req, |id, params| {
+			let path = util::uri_to_pathbuf(&params.text_document.uri)?;
 
-			let resp = Response {
-				id,
-				result: Some(result),
-				error: None,
+			let Some(gfile_k) = self.db.try_file(path.into_boxed_path()) else {
+				return Self::respond_null(conn, id);
 			};
 
-			conn.sender.send(Message::Response(resp))?;
-			Ok(())
+			let gfile = self.db.lookup_intern_file(gfile_k);
+
+			match gfile.lang {
+				LangId::ZScript => {
+					return self.zscript_req_semtokens_full(conn, gfile, id);
+				}
+				_ => Self::respond_null(conn, id),
+			}
 		})?;
 
 		req = Self::try_request::<HoverRequest, _>(req, |id, params| {
@@ -185,6 +190,20 @@ impl Core {
 				}
 				_ => Self::respond_null(conn, id),
 			}
+		})?;
+
+		req = Self::try_request::<GotoDefinition, _>(req, |id, _params| {
+			let result = Some(GotoDefinitionResponse::Array(vec![]));
+			let result = serde_json::to_value(result)?;
+
+			let resp = Response {
+				id,
+				result: Some(result),
+				error: None,
+			};
+
+			conn.sender.send(Message::Response(resp))?;
+			Ok(())
 		})?;
 
 		ControlFlow::Continue(req)

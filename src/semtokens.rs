@@ -7,45 +7,45 @@ use lsp_types::{SemanticTokenModifier, SemanticTokenType, SemanticTokensLegend};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SemToken {
-	Type,
 	Class,
-	Enum,
-	Struct,
-	TypeParam,
-	Param,
-	Variable,
-	Property,
-	EnumVariant,
-	Function,
-	Method,
-	Keyword,
-	Modifier,
 	Comment,
-	String,
+	Constant,
+	Enum,
+	Function,
+	Keyword,
+	Method,
+	Modifier,
 	Number,
 	Operator,
+	Param,
+	Property,
+	String,
+	Struct,
+	Type,
+	TypeParam,
+	Variable,
 }
 
 impl From<SemToken> for SemanticTokenType {
 	fn from(value: SemToken) -> Self {
 		match value {
-			SemToken::Type => Self::TYPE,
 			SemToken::Class => Self::CLASS,
-			SemToken::Enum => Self::ENUM,
-			SemToken::Struct => Self::STRUCT,
-			SemToken::TypeParam => Self::TYPE_PARAMETER,
-			SemToken::Param => Self::PARAMETER,
-			SemToken::Variable => Self::VARIABLE,
-			SemToken::Property => Self::PROPERTY,
-			SemToken::EnumVariant => Self::ENUM_MEMBER,
-			SemToken::Function => Self::FUNCTION,
-			SemToken::Method => Self::METHOD,
-			SemToken::Keyword => Self::KEYWORD,
-			SemToken::Modifier => Self::MODIFIER,
 			SemToken::Comment => Self::COMMENT,
-			SemToken::String => Self::STRING,
+			SemToken::Constant => Self::ENUM_MEMBER,
+			SemToken::Enum => Self::ENUM,
+			SemToken::Function => Self::FUNCTION,
+			SemToken::Keyword => Self::KEYWORD,
+			SemToken::Method => Self::METHOD,
+			SemToken::Modifier => Self::MODIFIER,
 			SemToken::Number => Self::NUMBER,
 			SemToken::Operator => Self::OPERATOR,
+			SemToken::Param => Self::PARAMETER,
+			SemToken::Property => Self::PROPERTY,
+			SemToken::String => Self::STRING,
+			SemToken::Struct => Self::STRUCT,
+			SemToken::Type => Self::TYPE,
+			SemToken::TypeParam => Self::TYPE_PARAMETER,
+			SemToken::Variable => Self::VARIABLE,
 		}
 	}
 }
@@ -131,25 +131,25 @@ impl Highlighter {
 
 #[must_use]
 pub(crate) fn legend() -> SemanticTokensLegend {
-	// Must match `SemToken`.
+	// Ordering must match that of `SemToken`.
 	let types = vec![
-		SemToken::Type.into(),
 		SemToken::Class.into(),
-		SemToken::Enum.into(),
-		SemToken::Struct.into(),
-		SemToken::TypeParam.into(),
-		SemToken::Param.into(),
-		SemToken::Variable.into(),
-		SemToken::Property.into(),
-		SemToken::EnumVariant.into(),
-		SemToken::Function.into(),
-		SemToken::Method.into(),
-		SemToken::Keyword.into(),
-		SemToken::Modifier.into(),
 		SemToken::Comment.into(),
-		SemToken::String.into(),
+		SemToken::Constant.into(),
+		SemToken::Enum.into(),
+		SemToken::Function.into(),
+		SemToken::Keyword.into(),
+		SemToken::Method.into(),
+		SemToken::Modifier.into(),
 		SemToken::Number.into(),
 		SemToken::Operator.into(),
+		SemToken::Param.into(),
+		SemToken::Property.into(),
+		SemToken::String.into(),
+		SemToken::Struct.into(),
+		SemToken::Type.into(),
+		SemToken::TypeParam.into(),
+		SemToken::Variable.into(),
 	];
 
 	let modifiers = vec![

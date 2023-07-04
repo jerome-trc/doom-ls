@@ -1,181 +1,288 @@
 //! Semantic token highlighting.
 
 use doomfront::{
-	rowan::ast::AstNode,
-	zdoom::zscript::{ast, Syn, SyntaxElem, SyntaxNode, SyntaxToken},
+	rowan::WalkEvent,
+	zdoom::zscript::{Syn, SyntaxElem, SyntaxNode, SyntaxToken},
 };
 
 use crate::semtokens::{Highlighter, SemToken};
 
-pub(super) fn walk_tree(hl: &mut Highlighter, cursor: SyntaxNode) {
-	for elem in cursor.children_with_tokens() {
-		match elem {
-			SyntaxElem::Node(node) => {
-				let Some(top) = ast::TopLevel::cast(node) else { continue; };
+pub(crate) struct Context {
+	pub(crate) hl: Highlighter,
+	// TODO: Some kind of high-level semantic representation here.
+}
 
-				match top {
-					ast::TopLevel::ClassDef(_) => {}
-					ast::TopLevel::ClassExtend(_) => {}
-					ast::TopLevel::ConstDef(constdef) => {
-						highlight_constdef(hl, constdef);
-					}
-					ast::TopLevel::EnumDef(_) => {}
-					ast::TopLevel::MixinClassDef(_) => {}
-					ast::TopLevel::Include(include) => {
-						highlight_include_directive(hl, include);
-					}
-					ast::TopLevel::StructDef(_) => {}
-					ast::TopLevel::StructExtend(_) => {}
-					ast::TopLevel::Version(version) => {
-						highlight_version_directive(hl, version);
+pub(super) fn traverse(ctx: &mut Context, cursor: SyntaxNode) {
+	debug_assert_eq!(cursor.kind(), Syn::Root);
+
+	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+	enum IdentMode {
+		Constant,
+		/// Only for actor state usage arguments.
+		Control,
+		Function,
+		Super,
+		Type,
+		Var,
+	}
+
+	let mut ident_mode = vec![];
+	let mut operators = 0;
+
+	for event in cursor.preorder_with_tokens() {
+		match event {
+			WalkEvent::Enter(enter) => match enter {
+				SyntaxElem::Token(token) => {
+					let range = token.text_range();
+
+					if token.kind() != Syn::Ident {
+						highlight_token(ctx, &token, operators > 0);
+					} else {
+						// No highlighting at the root, since no identifiers are expected.
+						let Some(idmode) = ident_mode.last() else { continue; };
+
+						match idmode {
+							IdentMode::Function => {
+								ctx.hl.advance(SemToken::Function, range);
+							}
+							IdentMode::Type => {
+								ctx.hl.advance(SemToken::Type, range);
+							}
+							IdentMode::Var => {
+								// TODO: Semantically-aware identifier highlighting.
+								if !token.text().eq_ignore_ascii_case("self") {
+									ctx.hl.advance(SemToken::Variable, range);
+								} else {
+									ctx.hl.advance(SemToken::Modifier, range);
+								}
+							}
+							IdentMode::Super => {
+								ctx.hl.advance(SemToken::Modifier, range);
+							}
+							IdentMode::Control => {
+								ctx.hl.advance(SemToken::Keyword, range);
+							}
+							IdentMode::Constant => {
+								ctx.hl.advance(SemToken::Constant, range);
+							}
+						}
 					}
 				}
-			}
-			SyntaxElem::Token(token) => {
-				highlight_toplevel_token(hl, token);
-			}
+				SyntaxElem::Node(node) => match node.kind() {
+					Syn::EnumVariant | Syn::ConstDef => ident_mode.push(IdentMode::Constant),
+					Syn::TypeRef
+					| Syn::ClassDef
+					| Syn::ClassExtend
+					| Syn::EnumDef
+					| Syn::StructDef
+					| Syn::StructExtend => ident_mode.push(IdentMode::Type),
+					Syn::VarName
+					| Syn::ArgList
+					| Syn::FieldDecl
+					| Syn::FlagDef
+					| Syn::ParamList
+					| Syn::PropertyDef
+					| Syn::PropertySetting
+					| Syn::MemberExpr
+					| Syn::IdentExpr => {
+						ident_mode.push(IdentMode::Var);
+					}
+					Syn::FunctionDecl | Syn::ActionFunction | Syn::CallExpr => {
+						ident_mode.push(IdentMode::Function);
+					}
+					Syn::BinExpr | Syn::PostfixExpr | Syn::PrefixExpr => {
+						operators += 1;
+					}
+					Syn::SuperExpr => {
+						ident_mode.push(IdentMode::Super);
+					}
+					Syn::StatesUsage => {
+						ident_mode.push(IdentMode::Control);
+					}
+					_ => {}
+				},
+			},
+			WalkEvent::Leave(leave) => match leave {
+				SyntaxElem::Node(node) => match node.kind() {
+					Syn::EnumVariant | Syn::ConstDef => {
+						let _ = ident_mode.pop();
+					}
+					Syn::TypeRef
+					| Syn::ClassDef
+					| Syn::ClassExtend
+					| Syn::EnumDef
+					| Syn::StructDef
+					| Syn::StructExtend => {
+						let _ = ident_mode.pop();
+					}
+					Syn::VarName
+					| Syn::ArgList
+					| Syn::FieldDecl
+					| Syn::FlagDef
+					| Syn::ParamList
+					| Syn::PropertyDef
+					| Syn::PropertySetting
+					| Syn::MemberExpr
+					| Syn::IdentExpr => {
+						let _ = ident_mode.pop();
+					}
+					Syn::FunctionDecl | Syn::ActionFunction | Syn::CallExpr => {
+						let _ = ident_mode.pop();
+					}
+					Syn::BinExpr | Syn::PostfixExpr | Syn::PrefixExpr => {
+						operators -= 1;
+					}
+					Syn::SuperExpr => {
+						let _ = ident_mode.pop();
+					}
+					Syn::StatesUsage => {
+						let _ = ident_mode.pop();
+					}
+					_ => {}
+				},
+				SyntaxElem::Token(_) => {}
+			},
 		}
 	}
 }
 
-fn highlight_toplevel_token(hl: &mut Highlighter, token: SyntaxToken) {
-	if token.kind().is_glyph() || token.kind().is_keyword() {
-		// None of these are allowed at the top level.
+// Common //////////////////////////////////////////////////////////////////////
+
+/// Note that this does not highlight identifiers, which need special handling.
+fn highlight_token(ctx: &mut Context, token: &SyntaxToken, operator: bool) {
+	let syn = token.kind();
+	let range = token.text_range();
+
+	if syn.is_keyword() {
+		match syn {
+			Syn::KwBreak
+			| Syn::KwCase
+			| Syn::KwContinue
+			| Syn::KwDo
+			| Syn::KwElse
+			| Syn::KwFail
+			| Syn::KwForEach
+			| Syn::KwFor
+			| Syn::KwGoto
+			| Syn::KwIf
+			| Syn::KwLoop
+			| Syn::KwReturn
+			| Syn::KwStop
+			| Syn::KwSwitch
+			| Syn::KwUntil
+			| Syn::KwVersion
+			| Syn::KwWait
+			| Syn::KwWhile => ctx.hl.advance(SemToken::Keyword, range),
+			Syn::KwAbstract
+			| Syn::KwAction
+			| Syn::KwArray
+			| Syn::KwBool
+			| Syn::KwBright
+			| Syn::KwByte
+			| Syn::KwCanRaise
+			| Syn::KwChar
+			| Syn::KwClass
+			| Syn::KwClearScope
+			| Syn::KwColor
+			| Syn::KwConst
+			| Syn::KwDefault
+			| Syn::KwDeprecated
+			| Syn::KwDouble
+			| Syn::KwEnum
+			| Syn::KwExtend
+			| Syn::KwFalse
+			| Syn::KwFast
+			| Syn::KwFinal
+			| Syn::KwFlagDef
+			| Syn::KwFloat
+			| Syn::KwInt
+			| Syn::KwInt16
+			| Syn::KwInt8
+			| Syn::KwInternal
+			| Syn::KwIn
+			| Syn::KwLatent
+			| Syn::KwLet
+			| Syn::KwLight
+			| Syn::KwLong
+			| Syn::KwMap
+			| Syn::KwMapIterator
+			| Syn::KwMeta
+			| Syn::KwMixin
+			| Syn::KwName
+			| Syn::KwNative
+			| Syn::KwNoDelay
+			| Syn::KwNone
+			| Syn::KwOffset
+			| Syn::KwOut
+			| Syn::KwOverride
+			| Syn::KwPlay
+			| Syn::KwPrivate
+			| Syn::KwProperty
+			| Syn::KwProtected
+			| Syn::KwReadOnly
+			| Syn::KwSByte
+			| Syn::KwShort
+			| Syn::KwSlow
+			| Syn::KwSound
+			| Syn::KwState
+			| Syn::KwStates
+			| Syn::KwStatic
+			| Syn::KwString
+			| Syn::KwStruct
+			| Syn::KwSuper
+			| Syn::KwReplaces
+			| Syn::KwTransient
+			| Syn::KwTrue
+			| Syn::KwUi
+			| Syn::KwUInt
+			| Syn::KwUInt16
+			| Syn::KwUInt8
+			| Syn::KwULong
+			| Syn::KwUShort
+			| Syn::KwVar
+			| Syn::KwVarArg
+			| Syn::KwVector2
+			| Syn::KwVector3
+			| Syn::KwVirtual
+			| Syn::KwVirtualScope
+			| Syn::KwVoid
+			| Syn::KwAuto
+			| Syn::KwVolatile => ctx.hl.advance(SemToken::Modifier, range),
+			Syn::KwAlignOf | Syn::KwCross | Syn::KwDot | Syn::KwIs | Syn::KwSizeOf => {
+				ctx.hl.advance(SemToken::Operator, range)
+			}
+			_ => {}
+		};
+
 		return;
 	}
 
-	let semtoken = match token.kind() {
-		// Legal
-		Syn::Comment | Syn::DocComment => SemToken::Comment,
-		// Illegal
-		Syn::IntLit | Syn::FloatLit => SemToken::Number,
-		Syn::StringLit | Syn::NameLit => SemToken::String,
-		Syn::NullLit => SemToken::Keyword,
-		Syn::Ident => SemToken::Variable,
-		// Likely other trivia
-		_ => return,
-	};
-
-	hl.advance(semtoken, token.text_range());
-}
-
-fn highlight_constdef(hl: &mut Highlighter, constdef: ast::ConstDef) {
-	for elem in constdef.syntax().children_with_tokens() {
-		match elem {
-			SyntaxElem::Token(token) => {
-				if token.kind().is_keyword() {
-					hl.advance(SemToken::Keyword, token.text_range());
-				} else if token.kind() == Syn::Ident {
-					hl.advance(SemToken::Type, token.text_range());
-				} else if matches!(token.kind(), Syn::Comment | Syn::DocComment) {
-					hl.advance(SemToken::Comment, token.text_range());
-				}
-			}
-			SyntaxElem::Node(node) => {
-				let Some(expr) = ast::Expr::cast(node) else { continue; };
-				highlight_expr(hl, expr);
-			}
+	if syn.is_glyph() && operator {
+		if matches!(
+			syn,
+			Syn::ParenL
+				| Syn::ParenR | Syn::BracketL
+				| Syn::BracketR | Syn::AngleL
+				| Syn::AngleR | Syn::BraceL
+				| Syn::BraceR
+		) {
+			return;
 		}
+
+		ctx.hl.advance(SemToken::Operator, range);
+		return;
 	}
-}
 
-fn highlight_include_directive(hl: &mut Highlighter, include: ast::IncludeDirective) {
-	for elem in include.syntax().children_with_tokens() {
-		match elem {
-			SyntaxElem::Token(token) => match token.kind() {
-				Syn::StringLit => hl.advance(SemToken::String, token.text_range()),
-				Syn::PoundInclude => hl.advance(SemToken::Keyword, token.text_range()),
-				Syn::Comment | Syn::DocComment => hl.advance(SemToken::Comment, token.text_range()),
-				_ => {}
-			},
-			SyntaxElem::Node(node) => {
-				highlight_error_node(hl, node);
-			}
+	match syn {
+		Syn::IntLit | Syn::FloatLit => ctx.hl.advance(SemToken::Number, range),
+		Syn::StringLit | Syn::NameLit => ctx.hl.advance(SemToken::String, range),
+		Syn::NullLit => ctx.hl.advance(SemToken::Modifier, range),
+		Syn::PoundInclude | Syn::RegionStart | Syn::RegionEnd => {
+			ctx.hl.advance(SemToken::Keyword, range)
 		}
-	}
-}
-
-fn highlight_version_directive(hl: &mut Highlighter, version: ast::VersionDirective) {
-	for elem in version.syntax().children_with_tokens() {
-		match elem {
-			SyntaxElem::Token(token) => match token.kind() {
-				Syn::StringLit => hl.advance(SemToken::String, token.text_range()),
-				Syn::KwVersion => hl.advance(SemToken::Keyword, token.text_range()),
-				Syn::Comment | Syn::DocComment => hl.advance(SemToken::Comment, token.text_range()),
-				_ => {}
-			},
-			SyntaxElem::Node(node) => {
-				highlight_error_node(hl, node);
-			}
-		}
-	}
-}
-
-fn highlight_expr(hl: &mut Highlighter, expr: ast::Expr) {
-	match expr {
-		ast::Expr::Binary(e_bin) => {
-			for elem in e_bin.syntax().children_with_tokens() {
-				match elem {
-					SyntaxElem::Node(node) => {
-						if ast::Expr::can_cast(node.kind()) {
-							highlight_expr(hl, ast::Expr::cast(node).unwrap());
-						} else {
-							highlight_error_node(hl, node);
-						}
-					}
-					SyntaxElem::Token(token) => {
-						if token.kind().is_glyph() {
-							hl.advance(SemToken::Operator, token.text_range());
-						} else if matches!(token.kind(), Syn::Comment | Syn::DocComment) {
-							hl.advance(SemToken::Comment, token.text_range());
-						}
-					}
-				}
-			}
-		}
-		ast::Expr::Call(_) => {}
-		ast::Expr::ClassCast(_) => {}
-		ast::Expr::Group(e_grp) => {
-			highlight_expr(hl, e_grp.inner());
-		}
-		ast::Expr::Ident(_) => {}
-		ast::Expr::Index(_) => {}
-		ast::Expr::Literal(e_lit) => {
-			if let Some(strings) = e_lit.strings() {
-				for token in strings {
-					hl.advance(SemToken::String, token.syntax().text_range());
-				}
-			} else {
-				let lit = e_lit.token();
-
-				if lit.bool().is_some() || lit.null() {
-					hl.advance(SemToken::Keyword, lit.syntax().text_range());
-				} else if lit.string().is_some() || lit.name().is_some() {
-					hl.advance(SemToken::String, lit.syntax().text_range());
-				} else if lit.int().is_some() || lit.float().is_some() {
-					hl.advance(SemToken::Number, lit.syntax().text_range());
-				}
-			}
-		}
-		ast::Expr::Postfix(_) => {}
-		ast::Expr::Prefix(_) => {}
-		ast::Expr::Super(e_super) => {
-			hl.advance(SemToken::Keyword, e_super.token().text_range());
-		}
-		ast::Expr::Ternary(_) => {}
-		ast::Expr::Vector(_) => {}
-	}
-}
-
-fn highlight_error_node(hl: &mut Highlighter, node: SyntaxNode) {
-	debug_assert_eq!(node.kind(), Syn::Error);
-
-	for elem in node.children_with_tokens() {
-		let SyntaxElem::Token(token) = elem else { unreachable!(); };
-
-		if matches!(token.kind(), Syn::Comment | Syn::DocComment) {
-			hl.advance(SemToken::Comment, token.text_range());
-		}
+		Syn::Comment | Syn::DocComment => ctx.hl.advance(SemToken::Comment, range),
+		// Whitespace, unknown, state sprites, state frames, or previously handled.
+		_ => {}
 	}
 }
 
@@ -190,7 +297,9 @@ mod test {
 		const SOURCE: &str = r##""##; // TODO: need some test data...
 
 		let newlines = crate::scan::compute_newlines(SOURCE).into();
-		let mut hl = Highlighter::new(newlines);
+		let mut ctx = Context {
+			hl: Highlighter::new(newlines),
+		};
 
 		let ptree: ParseTree = doomfront::parse(
 			SOURCE,
@@ -198,7 +307,6 @@ mod test {
 			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
 		);
 
-		walk_tree(&mut hl, ptree.cursor());
-		dbg!(hl.tokens);
+		traverse(&mut ctx, ptree.cursor());
 	}
 }

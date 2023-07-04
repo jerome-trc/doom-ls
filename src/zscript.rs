@@ -88,15 +88,19 @@ impl Core {
 		id: RequestId,
 	) -> UnitResult {
 		let cursor = SyntaxNode::new_root(gfile.root);
-		let mut highlighter = Highlighter::new(gfile.newlines);
-		highlight::walk_tree(&mut highlighter, cursor);
+
+		let mut context = highlight::Context {
+			hl: Highlighter::new(gfile.newlines),
+		};
+
+		highlight::traverse(&mut context, cursor);
 
 		let resp = Response {
 			id,
 			result: Some(serde_json::to_value(SemanticTokensResult::Tokens(
 				SemanticTokens {
 					result_id: None,
-					data: highlighter.tokens,
+					data: context.hl.tokens,
 				},
 			))?),
 			error: None,
