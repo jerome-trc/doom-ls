@@ -11,6 +11,12 @@ license = "MIT OR Apache-2.0"
 publish = false
 repository = "https://github.com/jerome-trc/doom-ls/"
 
+[profile.release]
+strip = true
+opt-level = 3
+# TODO: `lto = true` later.
+codegen-units = 4
+
 [dependencies]
 doomfront = { path = "../viletech/doomfront", features = [
 	"zdoom"
