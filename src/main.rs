@@ -6,6 +6,7 @@
 mod db;
 mod intern;
 mod scan;
+mod semtokens;
 // Languages ///////////////////////////////////////////////////////////////////
 mod zscript;
 
@@ -19,10 +20,12 @@ use doomfront::rowan::{GreenNode, SyntaxKind};
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
 	notification::{DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument},
-	request::{GotoDefinition, HoverRequest},
+	request::{GotoDefinition, HoverRequest, SemanticTokensFullRequest},
 	FileChangeType, GotoDefinitionResponse, HoverProviderCapability, InitializeParams, OneOf,
-	SaveOptions, ServerCapabilities, TextDocumentContentChangeEvent, TextDocumentSyncCapability,
-	TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Url,
+	SaveOptions, SemanticTokensFullOptions, SemanticTokensOptions,
+	SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentContentChangeEvent,
+	TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+	TextDocumentSyncSaveOptions, Url, WorkDoneProgressOptions,
 };
 use tracing::{error, info};
 use tracing_subscriber::{
@@ -69,8 +72,16 @@ fn capabilities() -> ServerCapabilities {
 				})),
 			},
 		)),
-		hover_provider: Some(HoverProviderCapability::Simple(true)),
 		definition_provider: Some(OneOf::Left(true)),
+		hover_provider: Some(HoverProviderCapability::Simple(true)),
+		semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
+			SemanticTokensOptions {
+				work_done_progress_options: WorkDoneProgressOptions::default(),
+				legend: semtokens::legend(),
+				range: Some(false), // TODO: Support this.
+				full: Some(SemanticTokensFullOptions::Bool(true)),
+			},
+		)),
 		..Default::default()
 	}
 }
@@ -144,9 +155,29 @@ impl Core {
 
 			match gfile.lang {
 				LangId::ZScript => {
-					return self.zscript_handle_request_hover(conn, gfile, id, params);
+					return self.zscript_req_hover(conn, gfile, id, params);
 				}
-				LangId::Unknown => {
+				_ => {
+					conn.sender.send(Message::Response(Response {
+						id,
+						result: Some(serde_json::Value::Null),
+						error: None,
+					}))?;
+
+					Ok(())
+				}
+			}
+		})?;
+
+		req = Self::try_request::<SemanticTokensFullRequest, _>(req, |id, params| {
+			let path = Self::uri_to_pathbuf(&params.text_document.uri)?;
+			let gfile = self.db.file(path.into_boxed_path());
+
+			match gfile.lang {
+				LangId::ZScript => {
+					return self.zscript_req_semtokens_full(conn, gfile, id);
+				}
+				_ => {
 					conn.sender.send(Message::Response(Response {
 						id,
 						result: Some(serde_json::Value::Null),
@@ -192,7 +223,7 @@ impl Core {
 			)
 			.into_inner();
 
-			gfile.newlines = scan::compute_newlines(&source);
+			gfile.newlines = scan::compute_newlines(&source).into();
 
 			Ok(())
 		})?;
@@ -221,7 +252,7 @@ impl Core {
 						lex_ctx,
 					)
 					.into_inner(),
-					newlines: scan::compute_newlines(&params.text_document.text),
+					newlines: scan::compute_newlines(&params.text_document.text).into(),
 				},
 			);
 
@@ -239,7 +270,7 @@ impl Core {
 							GreenFile {
 								lang: LangId::Unknown,
 								root: GreenNode::new(SyntaxKind(u16::MAX), []),
-								newlines: vec![].into_boxed_slice(),
+								newlines: vec![].into(),
 							},
 						);
 					}

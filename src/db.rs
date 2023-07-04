@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use doomfront::{
 	rowan::{GreenNode, SyntaxNode, SyntaxToken, TextSize},
@@ -36,7 +36,7 @@ pub(crate) struct GreenFile {
 	pub(crate) root: GreenNode,
 	/// Byte offset of the beginning of each line
 	/// (except the first, which always has offset 0).
-	pub(crate) newlines: Box<[TextSize]>,
+	pub(crate) newlines: Arc<[TextSize]>,
 }
 
 impl GreenFile {

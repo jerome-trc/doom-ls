@@ -1,14 +1,19 @@
 //! Infrastructure related to the [ZScript](doomfront::zdoom::zscript) language.
 
-use doomfront::zdoom::zscript::Syn;
+mod highlight;
+
+use doomfront::zdoom::zscript::{Syn, SyntaxNode};
 use lsp_server::{Connection, Message, RequestId, Response};
-use lsp_types::{Hover, HoverContents, HoverParams, LanguageString, MarkedString};
+use lsp_types::{
+	Hover, HoverContents, HoverParams, LanguageString, MarkedString, SemanticTokens,
+	SemanticTokensResult,
+};
 use tracing::warn;
 
-use crate::{db::GreenFile, Core, UnitResult};
+use crate::{db::GreenFile, semtokens::Highlighter, Core, UnitResult};
 
 impl Core {
-	pub(super) fn zscript_handle_request_hover(
+	pub(super) fn zscript_req_hover(
 		&self,
 		conn: &Connection,
 		gfile: GreenFile,
@@ -69,6 +74,31 @@ impl Core {
 				contents,
 				range: None,
 			})?),
+			error: None,
+		};
+
+		conn.sender.send(Message::Response(resp))?;
+		Ok(())
+	}
+
+	pub(super) fn zscript_req_semtokens_full(
+		&self,
+		conn: &Connection,
+		gfile: GreenFile,
+		id: RequestId,
+	) -> UnitResult {
+		let cursor = SyntaxNode::new_root(gfile.root);
+		let mut highlighter = Highlighter::new(gfile.newlines);
+		highlight::walk_tree(&mut highlighter, cursor);
+
+		let resp = Response {
+			id,
+			result: Some(serde_json::to_value(SemanticTokensResult::Tokens(
+				SemanticTokens {
+					result_id: None,
+					data: highlighter.tokens,
+				},
+			))?),
 			error: None,
 		};
 
