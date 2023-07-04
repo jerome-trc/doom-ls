@@ -10,7 +10,7 @@ use lsp_types::{
 };
 use tracing::warn;
 
-use crate::{db::GreenFile, semtokens::Highlighter, Core, UnitResult};
+use crate::{intern::GreenFile, semtokens::Highlighter, Core, UnitResult};
 
 impl Core {
 	pub(super) fn zscript_req_hover(

@@ -1,11 +1,12 @@
+//! The core of DoomLS' incremental compiler.
+
 use std::{path::Path, sync::Arc};
 
-use doomfront::{
-	rowan::{GreenNode, SyntaxNode, SyntaxToken, TextSize},
-	LangExt,
+use crate::{
+	intern::{GreenFile, GreenFileKey, Interner, InternerDatabase},
+	scan::compute_newlines,
+	LangId,
 };
-
-use crate::intern::{Interner, InternerDatabase};
 
 #[salsa::database(InternerDatabase, CompilerDatabase)]
 #[derive(Default)]
@@ -18,45 +19,47 @@ impl salsa::Database for DatabaseImpl {}
 #[salsa::query_group(CompilerDatabase)]
 pub(crate) trait Compiler: Interner {
 	#[salsa::input]
-	fn file(&self, key: Box<Path>) -> GreenFile;
+	fn source(&self, key: Box<Path>) -> Source;
 
-	#[salsa::input]
-	fn try_file(&self, key: Box<Path>) -> Option<GreenFile>;
+	fn try_file(&self, key: Box<Path>) -> Option<GreenFileKey>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum LangId {
-	ZScript,
-	Unknown,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct GreenFile {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Source {
+	pub(crate) text: Arc<str>,
 	pub(crate) lang: LangId,
-	pub(crate) root: GreenNode,
-	/// Byte offset of the beginning of each line
-	/// (except the first, which always has offset 0).
-	pub(crate) newlines: Arc<[TextSize]>,
 }
 
-impl GreenFile {
-	#[must_use]
-	pub(crate) fn token_at<L: LangExt>(&self, pos: lsp_types::Position) -> Option<SyntaxToken<L>> {
-		let ix_line = pos.line as usize;
+#[must_use]
+fn try_file(db: &dyn Compiler, key: Box<Path>) -> Option<GreenFileKey> {
+	let source = db.source(key);
 
-		let file_start_offs = if ix_line != 0 {
-			match self.newlines.get(ix_line - 1) {
-				Some(n) => *n,
-				None => return None,
-			}
-		} else {
-			TextSize::from(0)
-		};
+	let parser = match source.lang {
+		LangId::ZScript => doomfront::zdoom::zscript::parse::file,
+		LangId::Unknown => return None,
+	};
 
-		let line_start_offs = TextSize::from(pos.character);
-		let cursor = SyntaxNode::<L>::new_root(self.root.clone());
-		cursor
-			.token_at_offset(file_start_offs + line_start_offs)
-			.next()
-	}
+	let lex_ctx = if let LangId::ZScript = source.lang {
+		doomfront::zdoom::lex::Context::ZSCRIPT_LATEST
+	} else {
+		doomfront::zdoom::lex::Context::NON_ZSCRIPT
+	};
+
+	let root = match source.lang {
+		LangId::ZScript => doomfront::parse::<doomfront::zdoom::zscript::Syn>(
+			source.text.as_ref(),
+			parser,
+			lex_ctx,
+		)
+		.into_inner(),
+		LangId::Unknown => return None,
+	};
+
+	let ret = db.intern_file(GreenFile {
+		lang: source.lang,
+		root,
+		newlines: compute_newlines(source.text.as_ref()).into(),
+	});
+
+	Some(ret)
 }

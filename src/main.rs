@@ -7,16 +7,14 @@ mod db;
 mod intern;
 mod scan;
 mod semtokens;
+mod util;
 // Languages ///////////////////////////////////////////////////////////////////
 mod zscript;
 
-use std::{
-	ops::ControlFlow,
-	path::{Path, PathBuf},
-};
+use std::ops::ControlFlow;
 
-use db::{GreenFile, LangId};
-use doomfront::rowan::{GreenNode, SyntaxKind};
+use db::Source;
+use intern::Interner;
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
 	notification::{DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument},
@@ -25,7 +23,7 @@ use lsp_types::{
 	SaveOptions, SemanticTokensFullOptions, SemanticTokensOptions,
 	SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentContentChangeEvent,
 	TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-	TextDocumentSyncSaveOptions, Url, WorkDoneProgressOptions,
+	TextDocumentSyncSaveOptions, WorkDoneProgressOptions,
 };
 use tracing::{error, info};
 use tracing_subscriber::{
@@ -37,6 +35,12 @@ use tracing_subscriber::{
 use crate::db::{Compiler, DatabaseImpl};
 
 pub(crate) type UnitResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum LangId {
+	ZScript,
+	Unknown,
+}
 
 fn main() -> UnitResult {
 	let timer = Uptime::default();
@@ -150,42 +154,36 @@ impl Core {
 
 		req = Self::try_request::<HoverRequest, _>(req, |id, params| {
 			let path =
-				Self::uri_to_pathbuf(&params.text_document_position_params.text_document.uri)?;
-			let gfile = self.db.file(path.into_boxed_path());
+				util::uri_to_pathbuf(&params.text_document_position_params.text_document.uri)?;
+
+			let Some(gfile_k) = self.db.try_file(path.into_boxed_path()) else {
+				return Self::respond_null(conn, id);
+			};
+
+			let gfile = self.db.lookup_intern_file(gfile_k);
 
 			match gfile.lang {
 				LangId::ZScript => {
 					return self.zscript_req_hover(conn, gfile, id, params);
 				}
-				_ => {
-					conn.sender.send(Message::Response(Response {
-						id,
-						result: Some(serde_json::Value::Null),
-						error: None,
-					}))?;
-
-					Ok(())
-				}
+				_ => Self::respond_null(conn, id),
 			}
 		})?;
 
 		req = Self::try_request::<SemanticTokensFullRequest, _>(req, |id, params| {
-			let path = Self::uri_to_pathbuf(&params.text_document.uri)?;
-			let gfile = self.db.file(path.into_boxed_path());
+			let path = util::uri_to_pathbuf(&params.text_document.uri)?;
+
+			let Some(gfile_k) = self.db.try_file(path.into_boxed_path()) else {
+				return Self::respond_null(conn, id);
+			};
+
+			let gfile = self.db.lookup_intern_file(gfile_k);
 
 			match gfile.lang {
 				LangId::ZScript => {
 					return self.zscript_req_semtokens_full(conn, gfile, id);
 				}
-				_ => {
-					conn.sender.send(Message::Response(Response {
-						id,
-						result: Some(serde_json::Value::Null),
-						error: None,
-					}))?;
-
-					Ok(())
-				}
+				_ => Self::respond_null(conn, id),
 			}
 		})?;
 
@@ -194,65 +192,44 @@ impl Core {
 
 	fn handle_notif(&mut self, mut notif: Notification) -> ControlFlow<UnitResult, Notification> {
 		notif = Self::try_notif::<DidChangeTextDocument, _>(notif, |mut params| {
-			let path = Self::uri_to_pathbuf(&params.text_document.uri)?.into_boxed_path();
-			let Some(mut gfile) = self.db.try_file(path.clone()) else { return Ok(()); };
-
-			let (parser, lex_ctx) = match gfile.lang {
-				LangId::ZScript => (
-					doomfront::zdoom::zscript::parse::file,
-					doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
-				),
-				_ => return Ok(()),
-			};
+			let path = util::uri_to_pathbuf(&params.text_document.uri)?.into_boxed_path();
+			let Some(gfile_k) = self.db.try_file(path.clone()) else { return Ok(()); };
+			let gfile = self.db.lookup_intern_file(gfile_k);
 
 			// TODO: Only re-parse as much as necessary.
-			let source = match params.content_changes.pop() {
+			let text = match params.content_changes.pop() {
 				Some(TextDocumentContentChangeEvent {
 					range: None,
 					range_length: None,
 					text,
 				}) => text,
-				_ => std::fs::read_to_string(path)?,
+				_ => std::fs::read_to_string(&path)?,
 			};
 
-			gfile.root = doomfront::parse(
-				&source, parser,
-				// TODO: Per-folder user config option for ZScript version.
-				// Everything else should use 1.0.0.
-				lex_ctx,
-			)
-			.into_inner();
-
-			gfile.newlines = scan::compute_newlines(&source).into();
+			self.db.set_source(
+				path,
+				Source {
+					text: text.into(),
+					lang: gfile.lang,
+				},
+			);
 
 			Ok(())
 		})?;
 
 		notif = Self::try_notif::<DidOpenTextDocument, _>(notif, |params| {
-			let (lang_id, parser, lex_ctx) = match params.text_document.language_id.as_str() {
-				"zscript" => (
-					LangId::ZScript,
-					doomfront::zdoom::zscript::parse::file,
-					doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
-				),
+			let lang_id = match params.text_document.language_id.as_str() {
+				"zscript" => LangId::ZScript,
 				_ => return Ok(()),
 			};
 
-			let gfk = Self::uri_to_pathbuf(&params.text_document.uri)?.into_boxed_path();
+			let src_key = util::uri_to_pathbuf(&params.text_document.uri)?.into_boxed_path();
 
-			self.db.set_file(
-				gfk,
-				GreenFile {
+			self.db.set_source(
+				src_key,
+				Source {
+					text: params.text_document.text.into(),
 					lang: lang_id,
-					root: doomfront::parse(
-						&params.text_document.text,
-						parser,
-						// TODO: Per-folder user config option for ZScript version.
-						// Everything else should use 1.0.0.
-						lex_ctx,
-					)
-					.into_inner(),
-					newlines: scan::compute_newlines(&params.text_document.text).into(),
 				},
 			);
 
@@ -261,16 +238,17 @@ impl Core {
 
 		notif = Self::try_notif::<DidChangeWatchedFiles, _>(notif, |params| {
 			for change in params.changes {
-				let path = Self::uri_to_pathbuf(&change.uri)?;
+				let path = util::uri_to_pathbuf(&change.uri)?.into_boxed_path();
 
 				match change.typ {
 					FileChangeType::CHANGED | FileChangeType::CREATED => {
-						self.db.set_file(
-							path.into_boxed_path(),
-							GreenFile {
+						let text = std::fs::read_to_string(&path)?.into();
+
+						self.db.set_source(
+							path,
+							Source {
+								text,
 								lang: LangId::Unknown,
-								root: GreenNode::new(SyntaxKind(u16::MAX), []),
-								newlines: vec![].into(),
 							},
 						);
 					}
@@ -321,43 +299,13 @@ impl Core {
 		}
 	}
 
-	fn uri_to_pathbuf(uri: &lsp_types::Url) -> Result<PathBuf, PathError> {
-		if uri.scheme() != "file" {
-			return Err(PathError::NonFileUri(uri.scheme().to_owned()));
-		}
+	fn respond_null(conn: &Connection, id: RequestId) -> UnitResult {
+		conn.sender.send(Message::Response(Response {
+			id,
+			result: Some(serde_json::Value::Null),
+			error: None,
+		}))?;
 
-		let ret = match uri.to_file_path() {
-			Ok(pb) => pb,
-			Err(()) => return Err(PathError::NoHost),
-		};
-
-		ret.canonicalize().map_err(PathError::Canonicalize)
-	}
-
-	#[allow(unused)]
-	fn path_to_uri(path: impl AsRef<Path>) -> Result<Url, PathError> {
-		Url::parse(&format!("file://{}", path.as_ref().display()))
-			.map_err(|err| PathError::UriParse(Box::new(err)))
-	}
-}
-
-#[derive(Debug)]
-enum PathError {
-	Canonicalize(std::io::Error),
-	NoHost,
-	NonFileUri(String),
-	UriParse(Box<dyn std::error::Error + Send + Sync>),
-}
-
-impl std::error::Error for PathError {}
-
-impl std::fmt::Display for PathError {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Self::Canonicalize(err) => write!(f, "failed to canonicalize a path: {err}"),
-			Self::NoHost => write!(f, "URI host is neither empty nor `localhost`"),
-			Self::NonFileUri(scheme) => write!(f, "expected scheme `file`, found: {scheme}"),
-			Self::UriParse(err) => write!(f, "failed to parse a `file` URI: {err}"),
-		}
+		Ok(())
 	}
 }
