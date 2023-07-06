@@ -314,7 +314,9 @@ impl Core {
 			let path = util::uri_to_pathbuf(&params.text_document.uri)?;
 
 			let Some((project, file_id)) = self.find_project_by_path_mut(&path) else {
-				unreachable!()
+				// The user is editing a file outside the load order.
+				// Nothing to do here.
+				return Ok(());
 			};
 
 			let lang = match project.try_get_gfile(file_id) {
