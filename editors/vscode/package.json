@@ -734,6 +734,15 @@
 				"type": "boolean",
 				"default": true,
 				"markdownDescription": "Enable the language server."
+			},
+			"doomls.loadOrder": {
+				"type": "array",
+				"default": [],
+				"items": {
+					"type": "string"
+				},
+				"scope": "window",
+				"markdownDescription": "List of files or directories for DoomLS to treat as though loaded with `--file`."
 			}
 		}
 	},

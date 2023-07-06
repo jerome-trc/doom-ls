@@ -18,6 +18,15 @@ pub(crate) struct LineCol {
 	pub(crate) col: u32,
 }
 
+impl From<LineCol> for lsp_types::Position {
+	fn from(value: LineCol) -> Self {
+		Self {
+			line: value.line,
+			character: value.col,
+		}
+	}
+}
+
 /// A kind of wide character encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
