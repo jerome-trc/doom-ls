@@ -9,6 +9,7 @@ mod project;
 mod request;
 mod semtokens;
 mod util;
+mod zpath;
 // Languages ///////////////////////////////////////////////////////////////////
 mod zscript;
 

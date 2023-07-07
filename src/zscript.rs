@@ -25,11 +25,11 @@ use tracing::warn;
 
 use crate::{
 	lines::{LineCol, LineIndex},
-	project::{
-		self, Compiler, FileId, FilePos, GreenFile, Project, QName, SymbolTable, ZPath, ZPathBuf,
-	},
+	project::{self, Compiler, FileId, FilePos, GreenFile, Project, QName, SymbolTable},
 	semtokens::Highlighter,
-	util, Core, ErrorBox, FxIndexSet, LangId, MsgError, UnitResult,
+	util,
+	zpath::{ZPath, ZPathBuf},
+	Core, ErrorBox, FxIndexSet, LangId, MsgError, UnitResult,
 };
 
 pub(crate) use self::data::*;
