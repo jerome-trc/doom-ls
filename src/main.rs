@@ -2,11 +2,12 @@
 //!
 //! A language server covering domain-specific languages written for Doom's source ports.
 
+#![allow(dead_code)]
+#![allow(unused)]
+
 // Common //////////////////////////////////////////////////////////////////////
 mod lines;
-mod notif;
 mod project;
-mod request;
 mod semtokens;
 mod util;
 mod zpath;
@@ -154,6 +155,7 @@ impl Core {
 						continue;
 					}
 
+					#[cfg(any())]
 					match request::handle(self, &conn, req) {
 						ControlFlow::Break(Err(err)) => {
 							error!("{err}");
@@ -168,12 +170,16 @@ impl Core {
 						error!("{err}");
 					}
 				}
-				lsp_server::Message::Notification(notif) => match notif::handle(self, notif) {
-					ControlFlow::Break(Err(err)) => {
-						error!("{err}");
+				lsp_server::Message::Notification(notif) =>
+				{
+					#[cfg(any())]
+					match notif::handle(self, notif) {
+						ControlFlow::Break(Err(err)) => {
+							error!("{err}");
+						}
+						ControlFlow::Continue(_) | ControlFlow::Break(_) => {}
 					}
-					ControlFlow::Continue(_) | ControlFlow::Break(_) => {}
-				},
+				}
 			}
 		}
 
@@ -256,6 +262,7 @@ impl Core {
 			}
 
 			if project.root().is_dir() {
+				#[cfg(any())]
 				project.build_include_trees();
 			}
 
