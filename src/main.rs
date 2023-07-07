@@ -116,7 +116,7 @@ fn capabilities() -> ServerCapabilities {
 			SemanticTokensOptions {
 				work_done_progress_options: WorkDoneProgressOptions::default(),
 				legend: semtokens::legend(),
-				range: Some(true), // TODO: Support this.
+				range: Some(true),
 				full: Some(SemanticTokensFullOptions::Bool(true)),
 			},
 		)),

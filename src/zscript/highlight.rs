@@ -13,8 +13,6 @@ pub(crate) struct Context {
 }
 
 pub(super) fn traverse(ctx: &mut Context, cursor: SyntaxNode) {
-	debug_assert_eq!(cursor.kind(), Syn::Root);
-
 	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 	enum IdentMode {
 		Constant,
@@ -291,5 +289,60 @@ fn highlight_token(ctx: &mut Context, token: &SyntaxToken, operator: bool) {
 		Syn::Comment | Syn::DocComment => ctx.hl.advance(SemToken::Comment, range),
 		// Whitespace, unknown, state sprites, state frames, or previously handled.
 		_ => {}
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use std::sync::Arc;
+
+	use doomfront::rowan::{NodeOrToken, TextRange, TextSize};
+	use lsp_types::SemanticToken;
+
+	use crate::lines::LineIndex;
+
+	use super::*;
+
+	#[test]
+	fn smoke_range() {
+		const SOURCE: &str = r#"
+/// This class undoubtedly does something remarkable.
+class Something : SomethingElse {
+	private uint a_field;
+}
+"#;
+
+		let green = doomfront::parse(
+			SOURCE,
+			doomfront::zdoom::zscript::parse::file,
+			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
+		)
+		.into_inner();
+
+		let lndx = Arc::new(LineIndex::new(SOURCE));
+
+		let cursor = SyntaxNode::new_root(green);
+
+		let node = match cursor
+			.covering_element(TextRange::new(TextSize::from(98), TextSize::from(102)))
+		{
+			NodeOrToken::Node(node) => node,
+			NodeOrToken::Token(token) => token.parent().unwrap(),
+		};
+
+		let tokens = crate::zscript::semtokens(node, lndx);
+
+		assert_eq!(tokens.data.len(), 1);
+
+		assert_eq!(
+			tokens.data[0],
+			SemanticToken {
+				delta_line: 3,
+				delta_start: 9,
+				length: 4,
+				token_type: SemToken::Keyword as u32,
+				token_modifiers_bitset: 0,
+			}
+		);
 	}
 }

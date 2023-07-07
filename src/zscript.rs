@@ -16,7 +16,8 @@ use doomfront::{
 use lsp_server::{Connection, Message, RequestId, Response};
 use lsp_types::{
 	Diagnostic, DiagnosticSeverity, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
-	LanguageString, MarkedString, Position, SemanticTokens, SemanticTokensResult,
+	LanguageString, MarkedString, Position, SemanticTokens, SemanticTokensRangeResult,
+	SemanticTokensResult,
 };
 use parking_lot::Mutex;
 use rayon::prelude::*;
@@ -210,25 +211,73 @@ impl Core {
 	) -> UnitResult {
 		let cursor = SyntaxNode::new_root(gfile.root);
 
-		let mut context = highlight::Context {
-			hl: Highlighter::new(gfile.lndx),
-		};
-
-		highlight::traverse(&mut context, cursor);
-
 		let resp = Response {
 			id,
 			result: Some(serde_json::to_value(SemanticTokensResult::Tokens(
-				SemanticTokens {
-					result_id: None,
-					data: context.hl.tokens,
-				},
+				semtokens(cursor, gfile.lndx),
 			))?),
 			error: None,
 		};
 
 		conn.sender.send(Message::Response(resp))?;
 		Ok(())
+	}
+}
+
+pub(super) fn req_semtokens_range(
+	conn: &Connection,
+	gfile: GreenFile,
+	id: RequestId,
+	range: lsp_types::Range,
+) -> UnitResult {
+	let cursor = SyntaxNode::new_root(gfile.root);
+
+	let lc_start = LineCol {
+		line: range.start.line,
+		col: range.end.character,
+	};
+
+	let lc_end = LineCol {
+		line: range.end.line,
+		col: range.end.character,
+	};
+
+	let Some(start) = gfile.lndx.offset(lc_start) else {
+		return Err(Box::new(MsgError(format!("invalid range start: {lc_start:?}"))));
+	};
+
+	let Some(end) = gfile.lndx.offset(lc_end) else {
+		return Err(Box::new(MsgError(format!("invalid range end: {lc_end:?}"))));
+	};
+
+	let node = match cursor.covering_element(TextRange::new(start, end)) {
+		NodeOrToken::Node(node) => node,
+		NodeOrToken::Token(token) => token.parent().unwrap(),
+	};
+
+	let resp = Response {
+		id,
+		result: Some(serde_json::to_value(SemanticTokensRangeResult::Tokens(
+			semtokens(node, gfile.lndx),
+		))?),
+		error: None,
+	};
+
+	conn.sender.send(Message::Response(resp))?;
+	Ok(())
+}
+
+#[must_use]
+pub(self) fn semtokens(node: SyntaxNode, lndx: Arc<LineIndex>) -> SemanticTokens {
+	let mut context = highlight::Context {
+		hl: Highlighter::new(lndx),
+	};
+
+	highlight::traverse(&mut context, node);
+
+	SemanticTokens {
+		result_id: None,
+		data: context.hl.tokens,
 	}
 }
 

@@ -7,7 +7,7 @@ use lsp_types::request::{
 	GotoDefinition, HoverRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
 };
 
-use crate::{project::Compiler, util, Core, LangId, UnitResult};
+use crate::{project::Compiler, util, zscript, Core, LangId, UnitResult};
 
 pub(super) fn handle(
 	core: &mut Core,
@@ -29,7 +29,7 @@ pub(super) fn handle(
 
 		match gfile.lang {
 			LangId::ZScript => {
-				return core.zscript_req_semtokens_full(conn, gfile, id);
+				return zscript::req_semtokens_range(conn, gfile, id, params.range);
 			}
 			_ => Core::respond_null(conn, id),
 		}
