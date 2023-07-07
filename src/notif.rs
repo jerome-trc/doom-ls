@@ -36,8 +36,7 @@ pub(super) fn handle(
 		};
 
 		let mut new_text = project.source(file_id).text.to_string();
-
-		lines::splice_changes(&mut new_text, params.content_changes);
+		let _ = lines::splice_changes(&mut new_text, params.content_changes);
 		let lndx = Arc::new(LineIndex::new(&new_text));
 
 		// TODO:

@@ -416,7 +416,11 @@ fn analyze_source_file_generic(
 }
 
 /// From rust-analyzer.
-pub(crate) fn splice_changes(text: &mut String, mut changes: Vec<TextDocumentContentChangeEvent>) {
+#[must_use]
+pub(crate) fn splice_changes(
+	prev_text: &mut String,
+	mut changes: Vec<TextDocumentContentChangeEvent>,
+) -> Option<impl Iterator<Item = TextDelta>> {
 	// Skip to the last full document change,
 	// as it invalidates all previous changes anyways.
 	let mut start = changes
@@ -430,20 +434,20 @@ pub(crate) fn splice_changes(text: &mut String, mut changes: Vec<TextDocumentCon
 		Some(lsp_types::TextDocumentContentChangeEvent {
 			range: None, text, ..
 		}) => {
-			*text = std::mem::take(text);
+			*prev_text = std::mem::take(text);
 			start += 1;
 
 			// The only change is a full document update.
 			if start == changes.len() {
-				return;
+				return None;
 			}
 		}
 		Some(_) => {}
 		// We received no content changes.
-		None => return,
+		None => return None,
 	}
 
-	let mut pos_db = PositionDb::new(text);
+	let mut pos_db = PositionDb::new(prev_text);
 
 	// The changes we got must be applied sequentially, but can cross lines so we
 	// have to keep our line index updated. Some clients (e.g. VSCode) sort the
@@ -451,20 +455,32 @@ pub(crate) fn splice_changes(text: &mut String, mut changes: Vec<TextDocumentCon
 	// the index and only rebuild it if needed.
 	let mut index_valid = u32::MAX;
 
-	for change in changes {
+	for change in &changes {
 		// The `None` case can't happen as we have handled it above already.
-		if let Some(range) = change.range {
-			if index_valid <= range.end.line {
-				pos_db = PositionDb::new(text);
-			}
+		let Some(range) = change.range else { unreachable!() };
 
-			index_valid = range.start.line;
+		if index_valid <= range.end.line {
+			pos_db = PositionDb::new(prev_text);
+		}
 
-			if let Some(range) = pos_db.text_range_utf8(analysis_range(range)) {
-				text.replace_range(std::ops::Range::<usize>::from(range), &change.text);
-			}
+		index_valid = range.start.line;
+
+		if let Some(range) = pos_db.text_range_utf8(analysis_range(range)) {
+			let r = std::ops::Range::<usize>::from(range);
+			prev_text.replace_range(r, &change.text);
 		}
 	}
+
+	Some(changes.into_iter().map(|change| TextDelta {
+		range: change.range.unwrap(),
+		new_text_len: change.text.len(),
+	}))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TextDelta {
+	pub(crate) range: lsp_types::Range,
+	pub(crate) new_text_len: usize,
 }
 
 /// Converts between flat [`TextSize`] offsets and `(line, col)`

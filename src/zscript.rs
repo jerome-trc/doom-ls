@@ -10,7 +10,7 @@ use std::{
 };
 
 use doomfront::{
-	rowan::{ast::AstNode, GreenNode, TextRange},
+	rowan::{ast::AstNode, GreenNode, NodeOrToken, TextRange, TextSize},
 	zdoom::zscript::{ast, Syn, SyntaxNode},
 };
 use lsp_server::{Connection, Message, RequestId, Response};
@@ -593,4 +593,105 @@ pub(crate) fn zscript_symbol_table(
 	}
 
 	ret
+}
+
+/// `text` must be the file's entire content.
+/// `green` must be tagged [`Syn::Root`]; the returned node is tagged as such too.
+#[must_use]
+pub(crate) fn _splicing_reparse(
+	text: &str,
+	green: GreenNode,
+	changed: (TextRange, TextSize),
+) -> GreenNode {
+	use doomfront::zdoom::zscript::parse;
+
+	let cursor = SyntaxNode::new_root(green.clone());
+
+	let to_reparse = cursor
+		.children()
+		.find(|node| node.text_range().contains_range(changed.0));
+
+	let Some(to_reparse) = to_reparse else {
+		return doomfront::parse(
+			text,
+			parse::file,
+			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
+		).into_inner();
+	};
+
+	let parser = match to_reparse.kind() {
+		Syn::Error => {
+			return doomfront::parse(
+				text,
+				parse::file,
+				doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
+			)
+			.into_inner();
+		}
+		Syn::ClassDef => parse::class_def,
+		Syn::MixinClassDef => parse::mixin_class_def,
+		Syn::StructDef => parse::struct_def,
+		Syn::ClassExtend | Syn::StructExtend => parse::class_or_struct_extend,
+		Syn::EnumDef => parse::enum_def,
+		Syn::IncludeDirective => parse::include_directive,
+		Syn::VersionDirective => parse::version_directive,
+		Syn::ConstDef => parse::const_def,
+		_ => unreachable!(),
+	};
+
+	let old_range = to_reparse.text_range();
+	let new_end = old_range.end().min(changed.0.start() + changed.1);
+
+	let new_child = doomfront::parse(
+		&text[TextRange::new(old_range.start(), new_end + TextSize::from(1))],
+		parser,
+		doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
+	)
+	.into_inner();
+
+	green.replace_child(to_reparse.index(), NodeOrToken::Node(new_child))
+}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+
+	#[test]
+	fn smoke_splicing_reparse() {
+		const SOURCE: &str = r#"
+
+/// This class undoubtedly does something remarkable.
+class Something : SomethingElse {
+	private uint a_field;
+}
+
+"#;
+
+		let green = doomfront::parse(
+			SOURCE,
+			doomfront::zdoom::zscript::parse::file,
+			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
+		)
+		.into_inner();
+
+		const SOURCE_CHANGED: &str = r#"
+
+/// This class undoubtedly does something remarkable.
+class Something : SomethingElse {}
+
+"#;
+
+		let mut source = SOURCE.to_string();
+		source.replace_range(89..113, "");
+		assert_eq!(source, SOURCE_CHANGED);
+
+		let _ = _splicing_reparse(
+			&source,
+			green,
+			(
+				TextRange::new(TextSize::from(89), TextSize::from(113)),
+				TextSize::from(0),
+			),
+		);
+	}
 }
