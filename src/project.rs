@@ -52,11 +52,6 @@ impl Project {
 			.filter(|file_id| self.files.contains_key(file_id))
 	}
 
-	#[must_use]
-	pub(crate) fn get_file_mut(&mut self, file_id: FileId) -> Option<&mut SourceFile> {
-		todo!()
-	}
-
 	pub(crate) fn intern_path(&mut self, path: &Path) -> FileId {
 		if let Some(i) = self.paths.case.get_index_of(path) {
 			return FileId(i as u32);
@@ -73,6 +68,15 @@ impl Project {
 		self.paths.intern(pathbuf)
 	}
 
+	#[must_use]
+	pub(crate) fn get_file_mut(&mut self, file_id: FileId) -> Option<&mut SourceFile> {
+		self.files.get_mut(&file_id)
+	}
+
+	pub(crate) fn set_file(&mut self, file_id: FileId, sfile: SourceFile) -> Option<SourceFile> {
+		self.files.insert(file_id, sfile)
+	}
+
 	pub(crate) fn on_file_delete(&mut self, path: PathBuf) {
 		if let Some(file_id) = self.get_fileid(&path) {
 			self.files.remove(&file_id);
@@ -85,6 +89,11 @@ pub(crate) struct SourceFile {
 	pub(crate) lang: LangId,
 	pub(crate) text: String,
 	pub(crate) lndx: LineIndex,
+	pub(crate) parsed: Option<ParsedFile>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ParsedFile {
 	pub(crate) green: GreenNode,
 	/// This flag gets set whenever a `textDocument/didChange` notification comes in.
 	/// It is left at `true` until the next time the client makes another request,
