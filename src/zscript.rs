@@ -1,4 +1,5 @@
 mod data;
+mod highlight;
 
 use std::{
 	ops::ControlFlow,
@@ -31,6 +32,68 @@ use crate::{
 };
 
 pub(crate) use self::data::*;
+
+// Request handling ////////////////////////////////////////////////////////////
+
+pub(super) fn req_semtokens_range(
+	conn: &Connection,
+	sfile: &SourceFile,
+	id: RequestId,
+	range: lsp_types::Range,
+) -> UnitResult {
+	let Some(parsed) = &sfile.parsed else { unreachable!() };
+	let cursor = SyntaxNode::new_root(parsed.green.clone());
+
+	let lc_start = LineCol {
+		line: range.start.line,
+		col: range.end.character,
+	};
+
+	let lc_end = LineCol {
+		line: range.end.line,
+		col: range.end.character,
+	};
+
+	let Some(start) = sfile.lndx.offset(lc_start) else {
+		return Err(Box::new(MsgError(format!("invalid range start: {lc_start:?}"))));
+	};
+
+	let Some(end) = sfile.lndx.offset(lc_end) else {
+		return Err(Box::new(MsgError(format!("invalid range end: {lc_end:?}"))));
+	};
+
+	let node = match cursor.covering_element(TextRange::new(start, end)) {
+		NodeOrToken::Node(node) => node,
+		NodeOrToken::Token(token) => token.parent().unwrap(),
+	};
+
+	let resp = Response {
+		id,
+		result: Some(serde_json::to_value(SemanticTokensRangeResult::Tokens(
+			semtokens(node, &sfile.lndx),
+		))?),
+		error: None,
+	};
+
+	conn.sender.send(Message::Response(resp))?;
+	Ok(())
+}
+
+#[must_use]
+pub(self) fn semtokens(node: SyntaxNode, lndx: &LineIndex) -> SemanticTokens {
+	let mut context = highlight::Context {
+		hl: Highlighter::new(lndx),
+	};
+
+	highlight::traverse(&mut context, node);
+
+	SemanticTokens {
+		result_id: None,
+		data: context.hl.tokens,
+	}
+}
+
+// Notification handling ///////////////////////////////////////////////////////
 
 /// Uses the [`rayon`] global thread pool.
 /// In the `Err` case, the root itself could not be read.

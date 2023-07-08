@@ -55,16 +55,16 @@ bitflags::bitflags! {
 	}
 }
 
-pub(crate) struct Highlighter {
-	pub(crate) lndx: Arc<LineIndex>,
+pub(crate) struct Highlighter<'li> {
+	pub(crate) lndx: &'li LineIndex,
 	pub(crate) tokens: Vec<lsp_types::SemanticToken>,
 	pub(crate) prev_line: u32,
 	pub(crate) prev_col: u32,
 }
 
-impl Highlighter {
+impl<'li> Highlighter<'li> {
 	#[must_use]
-	pub(crate) fn new(lndx: Arc<LineIndex>) -> Self {
+	pub(crate) fn new(lndx: &'li LineIndex) -> Self {
 		Self {
 			lndx,
 			tokens: vec![],
