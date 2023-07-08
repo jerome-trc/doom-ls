@@ -1,8 +1,7 @@
 //! Routines acting on [`Core`] for handling notifications from the client.
 
-use std::{ops::ControlFlow, sync::Arc};
+use std::ops::ControlFlow;
 
-use doomfront::rowan::{TextRange, TextSize};
 use lsp_server::Notification;
 use lsp_types::{
 	notification::{
@@ -31,12 +30,17 @@ pub(super) fn handle(
 			return Ok(());
 		};
 
-		let sfile = project.get_file_mut(file_id).unwrap();
+		let Some(sfile) = project.get_file_mut(file_id) else {
+			// The edited file falls under the purview of the load order,
+			// but it is of an unsupported language. Nothing to do here.
+			return Ok(());
+		};
+
 		let deltas = lines::splice_changes(&mut sfile.text, params.content_changes);
 		// TODO: Try reducing how many times the line index needs to be recomputed.
 		sfile.lndx = LineIndex::new(&sfile.text);
 
-		if let Some(deltas) = deltas {
+		let result = if let Some(deltas) = deltas {
 			match sfile.lang {
 				LangId::Unknown => Ok(()),
 				LangId::ZScript => zscript::partial_reparse(sfile, deltas),
@@ -46,7 +50,10 @@ pub(super) fn handle(
 				LangId::Unknown => Ok(()),
 				LangId::ZScript => zscript::full_reparse(sfile),
 			}
-		}
+		};
+
+		project.set_dirty(file_id);
+		result
 	})?;
 
 	notif = try_notif::<DidChangeWatchedFiles, _>(notif, |params| {
@@ -66,6 +73,7 @@ pub(super) fn handle(
 					let text = std::fs::read_to_string(&path)?;
 					sfile.lndx = LineIndex::new(&text);
 					sfile.text = text;
+					project.set_dirty(file_id);
 				}
 				FileChangeType::CREATED => {
 					let Some(project) = core.find_project_by_child_mut(&path) else {

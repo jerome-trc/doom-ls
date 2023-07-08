@@ -4,12 +4,10 @@ mod highlight;
 use std::{
 	ops::ControlFlow,
 	path::{Path, PathBuf},
-	sync::Arc,
 };
 
 use doomfront::{
-	logos::Source,
-	rowan::{ast::AstNode, GreenNode, NodeOrToken, TextRange, TextSize},
+	rowan::{ast::AstNode, GreenNode, Language, NodeOrToken, TextRange, TextSize},
 	zdoom::zscript::{ast, Syn, SyntaxNode},
 };
 use lsp_server::{Connection, Message, RequestId, Response};
@@ -24,18 +22,230 @@ use tracing::warn;
 
 use crate::{
 	lines::{LineCol, LineIndex, TextDelta},
-	project::{self, FileId, FilePos, ParsedFile, Project, QName, SourceFile},
+	project::{self, FileId, FilePos, ParsedFile, Project, QName, SourceFile, SymbolDelta},
 	semtokens::Highlighter,
 	util,
-	zpath::{ZPath, ZPathBuf},
-	Core, ErrorBox, FxIndexSet, LangId, MsgError, UnitResult,
+	zpath::ZPath,
+	Core, ErrorBox, LangId, MsgError, UnitResult,
 };
 
 pub(crate) use self::data::*;
 
 // Request handling ////////////////////////////////////////////////////////////
 
-pub(super) fn req_semtokens_full(
+pub(super) fn req_goto(
+	core: &Core,
+	conn: &Connection,
+	sfile: &SourceFile,
+	id: RequestId,
+	position: Position,
+	ix_project: usize,
+) -> UnitResult {
+	let parsed = sfile.parsed.as_ref().unwrap();
+	let cursor = SyntaxNode::new_root(parsed.green.clone());
+
+	let linecol = LineCol {
+		line: position.line,
+		col: position.character,
+	};
+
+	let Some(boffs) = sfile.lndx.offset(linecol) else {
+		Core::respond_null(conn, id)?;
+
+		return Err(
+			Box::new(MsgError(
+				format!("failed to get token at position {linecol:#?}")
+			))
+		);
+	};
+
+	let Some(token) = cursor.token_at_offset(boffs).next() else {
+		Core::respond_null(conn, id)?;
+
+		return Err(Box::new(MsgError(
+			format!("failed to get token at position {linecol:#?}")
+		)));
+	};
+
+	if token.kind() != Syn::Ident {
+		// For now, only identifiable things can have "definitions".
+		// TODO: string and name literals can point to all kinds of other things.
+		Core::respond_null(conn, id)?;
+		tracing::debug!("GotoDefinition miss - non-identifier.");
+		return Ok(());
+	}
+
+	let parent = token.parent().unwrap();
+
+	if token.text().eq_ignore_ascii_case("self") && ast::IdentExpr::can_cast(parent.kind()) {
+		// No useful information to provide here.
+		Core::respond_null(conn, id)?;
+		tracing::debug!("GotoDefinition miss - `self` identifier.");
+		return Ok(());
+	}
+
+	// TODO: If the user put in a "go to definition" request on the identifier
+	// making up the declaration, respond with a list of references.
+
+	for i in (0..=ix_project).rev() {
+		match req_goto_ident(&core.projects[i], token.text()) {
+			ControlFlow::Continue(()) => {}
+			ControlFlow::Break(Err(err)) => {
+				return Err(err);
+			}
+			ControlFlow::Break(Ok(resp)) => {
+				conn.sender.send(Message::Response(Response {
+					id,
+					result: Some(serde_json::to_value(resp).unwrap()),
+					error: None,
+				}))?;
+
+				return Ok(());
+			}
+		}
+	}
+
+	tracing::debug!("GotoDefinition miss - unknown symbol.");
+	Core::respond_null(conn, id)
+}
+
+/// Returns:
+/// - `Continue` if the symbol hasn't been found.
+/// - `Break(Ok)` if the symbol was resolved successfully.
+fn req_goto_ident(
+	project: &Project,
+	name: &str,
+) -> ControlFlow<Result<GotoDefinitionResponse, ErrorBox>> {
+	// TODO: Rather than trying every namespace, narrow down based on context.
+
+	if let Some(project::SymbolKey::ZScript(sym_k)) = project.lookup_global(&QName::for_type(name))
+	{
+		return goto_symbol(project, sym_k, name);
+	}
+
+	if let Some(project::SymbolKey::ZScript(sym_k)) = project.lookup_global(&QName::for_var(name)) {
+		return goto_symbol(project, sym_k, name);
+	}
+
+	ControlFlow::Continue(())
+}
+
+fn goto_symbol(
+	project: &Project,
+	sym_k: SymbolKey,
+	name: &str,
+) -> ControlFlow<Result<GotoDefinitionResponse, ErrorBox>> {
+	let storage = project.zscript();
+
+	let filepos = match sym_k {
+		SymbolKey::Class(class_k) => {
+			let datum = &storage.data[class_k];
+			let Datum::Class(class_d) = datum else { unreachable!() };
+			class_d.filepos
+		}
+		SymbolKey::Constant(const_k) => {
+			let datum = &storage.data[const_k];
+			let Datum::Constant(const_d) = datum else { unreachable!() };
+			const_d.filepos
+		}
+		SymbolKey::Enum(enum_k) => {
+			let datum = &storage.data[enum_k];
+			let Datum::Enum(enum_d) = datum else { unreachable!() };
+			enum_d.filepos
+		}
+		SymbolKey::MixinClass(mixin_k) => {
+			let datum = &storage.data[mixin_k];
+			let Datum::MixinClass(mixin_d) = datum else { unreachable!() };
+			mixin_d.filepos
+		}
+		SymbolKey::Struct(struct_k) => {
+			let datum = &storage.data[struct_k];
+			let Datum::Struct(struct_d) = datum else { unreachable!() };
+			struct_d.filepos
+		}
+	};
+
+	let path = project.get_path(filepos.file).unwrap();
+	let sfile = project.get_file(filepos.file).unwrap();
+
+	match util::make_location(&sfile.lndx, path, filepos.pos, name.len()) {
+		Ok(l) => ControlFlow::Break(Ok(GotoDefinitionResponse::Scalar(l))),
+		Err(err) => ControlFlow::Break(Err(Box::new(err))),
+	}
+}
+
+pub(super) fn req_hover(
+	conn: &Connection,
+	sfile: &SourceFile,
+	id: RequestId,
+	params: HoverParams,
+) -> UnitResult {
+	let Some(parsed) = &sfile.parsed else {
+		return Core::respond_null(conn, id);
+	};
+
+	let pos = params.text_document_position_params.position;
+
+	let Some(token) = parsed.token_at::<Syn>(pos, &sfile.lndx) else {
+		warn!("Failed to find token specified by a hover request.");
+
+		conn.sender.send(Message::Response(
+			Response {
+				id,
+				result: None,
+				error: None, // TODO
+			}
+		))?;
+
+		return Ok(());
+	};
+
+	let contents = match token.kind() {
+		Syn::KwClass => {
+			HoverContents::Array(vec![
+				MarkedString::LanguageString(LanguageString {
+					language: "zscript".to_string(),
+					value: "class".to_string(),
+				}),
+				MarkedString::String("A class defines an object type within ZScript, and is most of what you'll be creating within the language.".to_string())
+				])
+		}
+		Syn::KwStruct => {
+			HoverContents::Array(vec![
+				MarkedString::LanguageString(LanguageString {
+					language: "zscript".to_string(),
+					value: "struct".to_string(),
+				}),
+				MarkedString::String("A structure is an object type that does not inherit from Object and is not always — though occasionally is — a reference type, unlike classes.".to_string())
+				])
+		}
+		_ => {
+			conn.sender.send(Message::Response(
+				Response {
+					id,
+					result: Some(serde_json::Value::Null),
+					error: None,
+				}
+			))?;
+
+			return Ok(());
+		}
+	};
+
+	let resp = Response {
+		id,
+		result: Some(serde_json::to_value(Hover {
+			contents,
+			range: None,
+		})?),
+		error: None,
+	};
+
+	conn.sender.send(Message::Response(resp))?;
+	Ok(())
+}
+
+pub(crate) fn req_semtokens_full(
 	conn: &Connection,
 	sfile: &SourceFile,
 	id: RequestId,
@@ -55,7 +265,7 @@ pub(super) fn req_semtokens_full(
 	Ok(())
 }
 
-pub(super) fn req_semtokens_range(
+pub(crate) fn req_semtokens_range(
 	conn: &Connection,
 	sfile: &SourceFile,
 	id: RequestId,
@@ -113,13 +323,110 @@ pub(self) fn semtokens(node: SyntaxNode, lndx: &LineIndex) -> SemanticTokens {
 	}
 }
 
+pub(crate) fn symbol_delta(
+	storage: &mut Storage,
+	delta: &mut SymbolDelta<SymbolKey>,
+	file_id: FileId,
+	green: GreenNode,
+) {
+	debug_assert_eq!(green.kind(), Syn::kind_to_raw(Syn::Root));
+	let cursor = SyntaxNode::new_root(green);
+
+	for removed in &delta.removed {
+		storage.data.remove(removed.1.into_inner());
+	}
+
+	for child in cursor.children() {
+		let Some(top) = ast::TopLevel::cast(child) else { continue; };
+
+		match top {
+			ast::TopLevel::ClassDef(classdef) => {
+				let Ok(class_name) = classdef.name() else { continue; };
+
+				let dat_k = storage.data.insert(Datum::Class(ClassDatum {
+					filepos: FilePos {
+						file: file_id,
+						pos: class_name.text_range().start(),
+					},
+				}));
+
+				delta
+					.added
+					.push((QName::for_type(class_name.text()), SymbolKey::Class(dat_k)));
+			}
+			ast::TopLevel::ConstDef(constdef) => {
+				let Ok(const_name) = constdef.name() else { continue; };
+
+				let dat_k = storage.data.insert(Datum::Constant(ConstantDatum {
+					filepos: FilePos {
+						file: file_id,
+						pos: const_name.text_range().start(),
+					},
+				}));
+
+				delta.added.push((
+					QName::for_var(const_name.text()),
+					SymbolKey::Constant(dat_k),
+				));
+			}
+			ast::TopLevel::EnumDef(enumdef) => {
+				let Ok(enum_name) = enumdef.name() else { continue; };
+
+				let dat_k = storage.data.insert(Datum::Enum(EnumDatum {
+					filepos: FilePos {
+						file: file_id,
+						pos: enum_name.text_range().start(),
+					},
+				}));
+
+				delta
+					.added
+					.push((QName::for_type(enum_name.text()), SymbolKey::Enum(dat_k)));
+			}
+			ast::TopLevel::MixinClassDef(mixindef) => {
+				let Ok(mixin_name) = mixindef.name() else { continue; };
+
+				let dat_k = storage.data.insert(Datum::MixinClass(MixinClassDatum {
+					filepos: FilePos {
+						file: file_id,
+						pos: mixin_name.text_range().start(),
+					},
+				}));
+
+				delta.added.push((
+					QName::for_type(mixin_name.text()),
+					SymbolKey::MixinClass(dat_k),
+				));
+			}
+			ast::TopLevel::StructDef(structdef) => {
+				let Ok(struct_name) = structdef.name() else { continue; };
+
+				let dat_k = storage.data.insert(Datum::Struct(StructDatum {
+					filepos: FilePos {
+						file: file_id,
+						pos: struct_name.text_range().start(),
+					},
+				}));
+
+				delta.added.push((
+					QName::for_type(struct_name.text()),
+					SymbolKey::Struct(dat_k),
+				));
+			}
+			ast::TopLevel::ClassExtend(_)
+			| ast::TopLevel::StructExtend(_)
+			| ast::TopLevel::Include(_)
+			| ast::TopLevel::Version(_) => continue,
+		}
+	}
+}
+
 // Notification handling ///////////////////////////////////////////////////////
 
 /// Uses the [`rayon`] global thread pool.
 /// In the `Err` case, the root itself could not be read.
-/// `root` will always have the file stem `ZSCRIPT` (any ASCII casing),
+/// `zs_root` will always have the file stem `ZSCRIPT` (any ASCII casing),
 /// with one or no extension.
-/// Elements in `zpaths` are absolute (from LSP `file` URIs).
 pub(crate) fn rebuild_include_tree(
 	project: &mut Project,
 	zs_root: PathBuf,
@@ -202,7 +509,6 @@ pub(crate) fn rebuild_include_tree(
 				lndx,
 				parsed: Some(ParsedFile {
 					green,
-					dirty: true,
 					symbols: vec![],
 				}),
 			},
@@ -285,6 +591,7 @@ pub(crate) fn rebuild_include_tree(
 	for file in output {
 		let file_id = project.intern_pathbuf(file.path);
 		project.set_file(file_id, file.source);
+		project.set_dirty(file_id);
 	}
 
 	Ok(diags.into_inner())
@@ -300,7 +607,6 @@ pub(crate) fn full_reparse(sfile: &mut SourceFile) -> UnitResult {
 
 	sfile.parsed = Some(ParsedFile {
 		green,
-		dirty: true,
 		symbols: vec![],
 	});
 

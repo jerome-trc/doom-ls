@@ -15,6 +15,10 @@ pub(super) fn handle(
 	mut req: Request,
 ) -> ControlFlow<UnitResult, Request> {
 	req = try_request::<SemanticTokensRangeRequest, _>(req, |id, params| {
+		for project in &mut core.projects {
+			project.update_global_symbols();
+		}
+
 		let path = util::uri_to_pathbuf(&params.text_document.uri)?;
 
 		let Some((project, file_id)) = core.find_project_by_path(&path) else {
@@ -33,7 +37,34 @@ pub(super) fn handle(
 		}
 	})?;
 
+	req = try_request::<HoverRequest, _>(req, |id, params| {
+		for project in &mut core.projects {
+			project.update_global_symbols();
+		}
+
+		let path = util::uri_to_pathbuf(&params.text_document_position_params.text_document.uri)?;
+
+		let Some((project, file_id)) = core.find_project_by_path(&path) else {
+			return Core::respond_null(conn, id);
+		};
+
+		let Some(sfile) = project.get_file(file_id) else {
+			return Core::respond_null(conn, id);
+		};
+
+		match sfile.lang {
+			LangId::ZScript => {
+				return zscript::req_hover(conn, sfile, id, params);
+			}
+			_ => Core::respond_null(conn, id),
+		}
+	})?;
+
 	req = try_request::<SemanticTokensFullRequest, _>(req, |id, params| {
+		for project in &mut core.projects {
+			project.update_global_symbols();
+		}
+
 		let path = util::uri_to_pathbuf(&params.text_document.uri)?;
 
 		let Some((project, file_id)) = core.find_project_by_path(&path) else {
@@ -50,6 +81,40 @@ pub(super) fn handle(
 			}
 			_ => Core::respond_null(conn, id),
 		}
+	})?;
+
+	req = try_request::<GotoDefinition, _>(req, |id, params| {
+		for project in &mut core.projects {
+			project.update_global_symbols();
+		}
+
+		let path = util::uri_to_pathbuf(&params.text_document_position_params.text_document.uri)?;
+
+		let Some((project, ix_p, file_id)) = core.projects.iter().enumerate().find_map(|(i, p)| {
+			p.get_fileid(&path).map(|file_id| (p, i, file_id))
+		}) else {
+			tracing::debug!("GotoDefinition miss - file not in load order.");
+			return Core::respond_null(conn, id);
+		};
+
+		let Some(sfile) = project.get_file(file_id) else {
+			tracing::debug!("GotoDefinition miss - file not loaded.");
+			return Core::respond_null(conn, id);
+		};
+
+		let LangId::ZScript = sfile.lang else {
+			tracing::debug!("GotoDefinition miss - unsupported language.");
+			return Core::respond_null(conn, id);
+		};
+
+		zscript::req_goto(
+			core,
+			conn,
+			sfile,
+			id,
+			params.text_document_position_params.position,
+			ix_p,
+		)
 	})?;
 
 	ControlFlow::Continue(req)

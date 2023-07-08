@@ -4,7 +4,7 @@ use crate::project::FilePos;
 
 #[derive(Debug, Default)]
 pub(crate) struct Storage {
-	data: SlotMap<DatumKey, Datum>,
+	pub(super) data: SlotMap<DatumKey, Datum>,
 }
 
 slotmap::new_key_type! { pub(crate) struct DatumKey; }
@@ -15,6 +15,20 @@ pub(crate) enum SymbolKey {
 	Constant(DatumKey),
 	Enum(DatumKey),
 	MixinClass(DatumKey),
+	Struct(DatumKey),
+}
+
+impl SymbolKey {
+	#[must_use]
+	pub fn into_inner(self) -> DatumKey {
+		match self {
+			SymbolKey::Class(k)
+			| SymbolKey::Constant(k)
+			| SymbolKey::Enum(k)
+			| SymbolKey::MixinClass(k)
+			| SymbolKey::Struct(k) => k,
+		}
+	}
 }
 
 #[derive(Debug)]

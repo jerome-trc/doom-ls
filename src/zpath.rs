@@ -17,11 +17,6 @@ impl ZPathBuf {
 	pub(crate) fn new(inner: PathBuf) -> Self {
 		Self(inner)
 	}
-
-	#[must_use]
-	pub(crate) fn into_inner(self) -> PathBuf {
-		self.0
-	}
 }
 
 impl PartialEq for ZPathBuf {

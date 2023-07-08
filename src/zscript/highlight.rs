@@ -294,8 +294,6 @@ fn highlight_token(ctx: &mut Context, token: &SyntaxToken, operator: bool) {
 
 #[cfg(test)]
 mod test {
-	use std::sync::Arc;
-
 	use doomfront::rowan::{NodeOrToken, TextRange, TextSize};
 	use lsp_types::SemanticToken;
 

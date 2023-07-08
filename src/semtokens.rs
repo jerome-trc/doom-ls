@@ -1,7 +1,5 @@
 //! Abstractions over [`lsp_types::SemanticToken`] and [`lsp_types::SemanticTokenModifier`].
 
-use std::sync::Arc;
-
 use doomfront::rowan::TextRange;
 use lsp_types::{SemanticTokenModifier, SemanticTokenType, SemanticTokensLegend};
 

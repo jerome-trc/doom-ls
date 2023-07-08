@@ -2,9 +2,6 @@
 //!
 //! A language server covering domain-specific languages written for Doom's source ports.
 
-#![allow(dead_code)]
-#![allow(unused)]
-
 // Common //////////////////////////////////////////////////////////////////////
 mod lines;
 mod notif;
@@ -114,8 +111,8 @@ fn capabilities() -> ServerCapabilities {
 				})),
 			},
 		)),
-		// definition_provider: Some(OneOf::Left(true)),
-		// hover_provider: Some(HoverProviderCapability::Simple(true)),
+		definition_provider: Some(OneOf::Left(true)),
+		hover_provider: Some(HoverProviderCapability::Simple(true)),
 		semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
 			SemanticTokensOptions {
 				work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -128,6 +125,7 @@ fn capabilities() -> ServerCapabilities {
 	}
 }
 
+#[derive(Debug)]
 pub(crate) struct Core {
 	pub(crate) projects: Vec<Project>,
 	pub(crate) comms: CommSystem,

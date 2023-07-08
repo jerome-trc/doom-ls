@@ -1,11 +1,14 @@
 use std::path::{Path, PathBuf};
 
-use doomfront::rowan::{GreenNode, TextSize};
-use rustc_hash::FxHashMap;
+use doomfront::{
+	rowan::{GreenNode, SyntaxNode, SyntaxToken, TextSize},
+	LangExt,
+};
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::error;
 
 use crate::{
-	lines::LineIndex,
+	lines::{LineCol, LineIndex},
 	zpath::{ZPath, ZPathBuf},
 	zscript, FxIndexSet, LangId,
 };
@@ -15,6 +18,10 @@ pub(crate) struct Project {
 	root: PathBuf,
 	paths: PathInterner,
 	files: FxHashMap<FileId, SourceFile>,
+	/// A `SourceFile`'s ID gets added whenever a `textDocument/didChange`
+	/// notification comes in. It is left until the next time the client makes
+	/// a request, at which point that file's symbols are invalidated.
+	dirty: FxHashSet<FileId>,
 	symbols: FxHashMap<QName, SymbolKey>,
 	// Languages ///////////////////////////////////////////////////////////////
 	zscript: zscript::Storage,
@@ -27,6 +34,7 @@ impl Project {
 			root,
 			paths: PathInterner::default(),
 			files: FxHashMap::default(),
+			dirty: FxHashSet::default(),
 			symbols: FxHashMap::default(),
 			zscript: zscript::Storage::default(),
 		}
@@ -59,7 +67,7 @@ impl Project {
 	/// Note that this returns `None` if no source has been registered under
 	/// the file ID corresponding to `path` yet.
 	#[must_use]
-	pub(crate) fn get_fileid_z(&self, path: &ZPath) -> Option<FileId> {
+	pub(crate) fn _get_fileid_z(&self, path: &ZPath) -> Option<FileId> {
 		self.get_pathid_z(path)
 			.filter(|file_id| self.files.contains_key(file_id))
 	}
@@ -102,6 +110,53 @@ impl Project {
 
 	pub(crate) fn set_file(&mut self, file_id: FileId, sfile: SourceFile) -> Option<SourceFile> {
 		self.files.insert(file_id, sfile)
+	}
+
+	#[must_use]
+	pub(crate) fn lookup_global(&self, qname: &QName) -> Option<SymbolKey> {
+		self.symbols.get(qname).copied()
+	}
+
+	pub(crate) fn set_dirty(&mut self, file_id: FileId) {
+		self.dirty.insert(file_id);
+	}
+
+	pub(crate) fn update_global_symbols(&mut self) {
+		let all_dirty = self.dirty.drain().collect::<Vec<_>>();
+
+		for file_id in all_dirty {
+			let sfile = self.get_file_mut(file_id).unwrap();
+			let Some(parsed) = sfile.parsed.as_mut() else { continue; };
+
+			let green = parsed.green.clone();
+
+			match sfile.lang {
+				LangId::Unknown => continue,
+				LangId::ZScript => {
+					let mut delta = SymbolDelta::default();
+
+					for removed in parsed.symbols.drain(..) {
+						let SymbolKey::ZScript(sym_k) = removed.1;
+						delta.removed.push((removed.0, sym_k));
+					}
+
+					zscript::symbol_delta(&mut self.zscript, &mut delta, file_id, green);
+
+					for removed in delta.removed {
+						self.symbols.remove(&removed.0);
+					}
+
+					for added in delta.added {
+						self.symbols.insert(added.0, SymbolKey::ZScript(added.1));
+					}
+				}
+			};
+		}
+	}
+
+	#[must_use]
+	pub(crate) fn zscript(&self) -> &zscript::Storage {
+		&self.zscript
 	}
 
 	pub(crate) fn on_file_delete(&mut self, path: PathBuf) {
@@ -161,15 +216,31 @@ pub(crate) struct SourceFile {
 #[derive(Debug)]
 pub(crate) struct ParsedFile {
 	pub(crate) green: GreenNode,
-	/// This flag gets set whenever a `textDocument/didChange` notification comes in.
-	/// It is left at `true` until the next time the client makes another request,
-	/// at which point this file's symbols are invalidated.
-	pub(crate) dirty: bool,
 	/// Symbols "contributed" by this file to [`Project::symbols`], the global name
 	/// resolution table. This is used to provide a "symbol delta" for whenever
 	/// this file is changed, so that the entire global map does not have to be
 	/// recomputed.
-	pub(crate) symbols: Vec<QName>,
+	pub(crate) symbols: Vec<(QName, SymbolKey)>,
+}
+
+impl ParsedFile {
+	#[must_use]
+	pub(crate) fn token_at<L: LangExt>(
+		&self,
+		pos: lsp_types::Position,
+		lndx: &LineIndex,
+	) -> Option<SyntaxToken<L>> {
+		let linecol = LineCol {
+			line: pos.line,
+			col: pos.character,
+		};
+
+		let Some(offs) = lndx.offset(linecol) else { return None; };
+
+		SyntaxNode::<L>::new_root(self.green.clone())
+			.token_at_offset(offs)
+			.next()
+	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -182,6 +253,7 @@ pub(crate) struct FileId(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum QName {
 	Type(Box<str>),
+	Variable(Box<str>),
 	// TODO: Symbolic constants, CVars, GLDEF objects, et cetera...
 }
 
@@ -189,6 +261,11 @@ impl QName {
 	#[must_use]
 	pub(crate) fn for_type(string: &str) -> Self {
 		Self::Type(string.to_owned().into_boxed_str())
+	}
+
+	#[must_use]
+	pub(crate) fn for_var(string: &str) -> Self {
+		Self::Variable(string.to_owned().into_boxed_str())
 	}
 }
 
@@ -201,6 +278,21 @@ pub(crate) struct FilePos {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SymbolKey {
 	ZScript(zscript::SymbolKey),
+}
+
+#[derive(Debug)]
+pub(crate) struct SymbolDelta<K: Eq + Copy> {
+	pub(crate) removed: Vec<(QName, K)>,
+	pub(crate) added: Vec<(QName, K)>,
+}
+
+impl<K: Eq + Copy> Default for SymbolDelta<K> {
+	fn default() -> Self {
+		Self {
+			removed: vec![],
+			added: vec![],
+		}
+	}
 }
 
 #[derive(Debug, Default)]
