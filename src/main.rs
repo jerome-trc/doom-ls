@@ -263,7 +263,6 @@ impl Core {
 			}
 
 			if project.root().is_dir() {
-				#[cfg(any())]
 				project.build_include_trees();
 			}
 

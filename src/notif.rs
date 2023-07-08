@@ -120,8 +120,7 @@ pub(super) fn handle(
 				return Ok(());
 			};
 
-			#[cfg(any())]
-			let _ = zscript::rebuild_include_tree(path);
+			let _ = zscript::rebuild_include_tree(project, path);
 			// TODO: Handle error, emit diagnostics.
 		}
 

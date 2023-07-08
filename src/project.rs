@@ -4,7 +4,11 @@ use doomfront::rowan::{GreenNode, TextSize};
 use rustc_hash::FxHashMap;
 use tracing::error;
 
-use crate::{lines::LineIndex, zpath::ZPathBuf, zscript, FxIndexSet, LangId};
+use crate::{
+	lines::LineIndex,
+	zpath::{ZPath, ZPathBuf},
+	zscript, FxIndexSet, LangId,
+};
 
 #[derive(Debug)]
 pub(crate) struct Project {
@@ -52,6 +56,15 @@ impl Project {
 			.filter(|file_id| self.files.contains_key(file_id))
 	}
 
+	#[must_use]
+	pub(crate) fn get_fileid_z(&self, path: &ZPath) -> Option<FileId> {
+		self.paths
+			.nocase
+			.get_index_of(path)
+			.map(|i| FileId(i as u32))
+			.filter(|file_id| self.files.contains_key(file_id))
+	}
+
 	pub(crate) fn intern_path(&mut self, path: &Path) -> FileId {
 		if let Some(i) = self.paths.case.get_index_of(path) {
 			return FileId(i as u32);
@@ -80,6 +93,45 @@ impl Project {
 	pub(crate) fn on_file_delete(&mut self, path: PathBuf) {
 		if let Some(file_id) = self.get_fileid(&path) {
 			self.files.remove(&file_id);
+		}
+	}
+
+	pub(crate) fn build_include_trees(&mut self) {
+		let dir_reader = match std::fs::read_dir(self.root()) {
+			Ok(d_r) => d_r,
+			Err(err) => {
+				error!(
+					"Failed to build include trees for project: `{}` - {err}",
+					self.root().display()
+				);
+
+				return;
+			}
+		};
+
+		for result in dir_reader {
+			let d_ent = match result {
+				Ok(e) => e,
+				Err(err) => {
+					error!("Failed to inspect a project file: {err}");
+					continue;
+				}
+			};
+
+			let de_path = d_ent.path();
+			let Some(fstem) = de_path.file_stem() else { continue; };
+
+			if fstem.eq_ignore_ascii_case("ZSCRIPT") && !de_path.is_dir() {
+				match zscript::rebuild_include_tree(self, de_path) {
+					Ok(diags) => {
+						let _ = diags; // TODO
+					}
+					Err(err) => {
+						error!("Failed to read ZSCRIPT lump: {err}");
+						continue;
+					}
+				}
+			}
 		}
 	}
 }

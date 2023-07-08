@@ -26,11 +26,186 @@ use crate::{
 	project::{self, FileId, FilePos, ParsedFile, Project, QName, SourceFile},
 	semtokens::Highlighter,
 	util,
-	zpath::ZPathBuf,
+	zpath::{ZPath, ZPathBuf},
 	Core, ErrorBox, FxIndexSet, LangId, MsgError, UnitResult,
 };
 
 pub(crate) use self::data::*;
+
+/// Uses the [`rayon`] global thread pool.
+/// In the `Err` case, the root itself could not be read.
+/// `root` will always have the file stem `ZSCRIPT` (any ASCII casing),
+/// with one or no extension.
+/// Elements in `zpaths` are absolute (from LSP `file` URIs).
+pub(crate) fn rebuild_include_tree(
+	project: &mut Project,
+	zs_root: PathBuf,
+) -> std::io::Result<Vec<Diagnostic>> {
+	#[derive(Debug, Clone, Copy)]
+	struct Context<'p> {
+		project: &'p Project,
+		output: &'p Mutex<Vec<StagedFile>>,
+		diags: &'p Mutex<Vec<Diagnostic>>,
+	}
+
+	#[derive(Debug)]
+	struct StagedFile {
+		path: PathBuf,
+		source: SourceFile,
+	}
+
+	fn recur(ctx: Context, base: &Path, path: PathBuf, text: String) {
+		let green = doomfront::parse(
+			&text,
+			doomfront::zdoom::zscript::parse::file,
+			// TODO: Either user-configurable or from the root.
+			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
+		)
+		.into_inner();
+
+		let lndx = LineIndex::new(&text);
+		let incpaths = collect_include_paths(ctx, &lndx, green.clone());
+
+		incpaths.into_par_iter().for_each(|(incpath, range)| {
+			let complete = match base.join(&incpath).canonicalize() {
+				Ok(c) => c,
+				Err(err) => {
+					tracing::error!(
+						"Failed to canonicalize include path: `{}` - {err}",
+						incpath.display()
+					);
+					return;
+				}
+			};
+
+			let Some(file_id) = ctx
+				.project
+				.get_fileid_z(ZPath::new(&complete))
+				 else {
+					tracing::error!("Failed to get interned ZDoom path: `{}`", complete.display());
+					return;
+				};
+
+			let real_path = ctx.project.get_path(file_id).unwrap();
+
+			let text = match std::fs::read_to_string(real_path) {
+				Ok(s) => s,
+				Err(err) => {
+					ctx.diags.lock().push(Diagnostic {
+						range: util::make_range(&lndx, range),
+						severity: Some(DiagnosticSeverity::ERROR),
+						code: None,
+						code_description: None,
+						source: None,
+						message: format!("Failed to read file: `{}` - {err}", real_path.display()),
+						related_information: None,
+						tags: None,
+						data: None,
+					});
+
+					return;
+				}
+			};
+
+			let base = complete.parent().unwrap();
+			recur(ctx, base, real_path.to_path_buf(), text);
+		});
+
+		ctx.output.lock().push(StagedFile {
+			path,
+			source: SourceFile {
+				lang: LangId::ZScript,
+				text,
+				lndx,
+				parsed: Some(ParsedFile {
+					green,
+					dirty: true,
+					symbols: vec![],
+				}),
+			},
+		});
+	}
+
+	#[must_use]
+	fn collect_include_paths(
+		ctx: Context,
+		lndx: &LineIndex,
+		green: GreenNode,
+	) -> Vec<(PathBuf, TextRange)> {
+		let cursor = SyntaxNode::new_root(green);
+
+		cursor
+			.children()
+			.filter_map(|child| {
+				if child.kind() != Syn::IncludeDirective {
+					return None;
+				}
+
+				// This is infallible, since an include directive must have
+				// at least an `#include` token.
+				let last_token = child.last_token().unwrap();
+
+				if last_token.kind() != Syn::StringLit {
+					ctx.diags.lock().push(Diagnostic {
+						range: util::make_range(lndx, last_token.text_range()),
+						severity: Some(DiagnosticSeverity::ERROR),
+						code: None,
+						code_description: None,
+						source: None,
+						message: format!("Expected a string, found: {:#?}", last_token.kind()),
+						related_information: None,
+						tags: None,
+						data: None,
+					});
+					return None;
+				};
+
+				let text = last_token.text();
+
+				if !text.is_empty() {
+					Some((
+						PathBuf::from(&text[1..(text.len() - 1)]),
+						last_token.text_range(),
+					))
+				} else {
+					ctx.diags.lock().push(Diagnostic {
+						range: util::make_range(lndx, last_token.text_range()),
+						severity: Some(DiagnosticSeverity::ERROR),
+						code: None,
+						code_description: None,
+						source: None,
+						message: "Expected a path, found an empty string".to_string(),
+						related_information: None,
+						tags: None,
+						data: None,
+					});
+					None
+				}
+			})
+			.collect()
+	}
+
+	let text = std::fs::read_to_string(&zs_root)?;
+	let output = Mutex::new(vec![]);
+	let diags = Mutex::new(vec![]);
+
+	let ctx = Context {
+		project,
+		output: &output,
+		diags: &diags,
+	};
+
+	recur(ctx, project.root(), zs_root, text);
+
+	let output = output.into_inner();
+
+	for file in output {
+		let file_id = project.intern_pathbuf(file.path);
+		project.set_file(file_id, file.source);
+	}
+
+	Ok(diags.into_inner())
+}
 
 pub(crate) fn full_reparse(sfile: &mut SourceFile) -> UnitResult {
 	let green = doomfront::parse(
