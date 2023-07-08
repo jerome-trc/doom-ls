@@ -9,6 +9,7 @@
 mod lines;
 mod notif;
 mod project;
+mod request;
 mod semtokens;
 mod util;
 mod zpath;
@@ -113,8 +114,8 @@ fn capabilities() -> ServerCapabilities {
 				})),
 			},
 		)),
-		definition_provider: Some(OneOf::Left(true)),
-		hover_provider: Some(HoverProviderCapability::Simple(true)),
+		// definition_provider: Some(OneOf::Left(true)),
+		// hover_provider: Some(HoverProviderCapability::Simple(true)),
 		semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
 			SemanticTokensOptions {
 				work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -156,7 +157,6 @@ impl Core {
 						continue;
 					}
 
-					#[cfg(any())]
 					match request::handle(self, &conn, req) {
 						ControlFlow::Break(Err(err)) => {
 							error!("{err}");
@@ -171,16 +171,12 @@ impl Core {
 						error!("{err}");
 					}
 				}
-				lsp_server::Message::Notification(notif) =>
-				{
-					#[cfg(any())]
-					match notif::handle(self, notif) {
-						ControlFlow::Break(Err(err)) => {
-							error!("{err}");
-						}
-						ControlFlow::Continue(_) | ControlFlow::Break(_) => {}
+				lsp_server::Message::Notification(notif) => match notif::handle(self, notif) {
+					ControlFlow::Break(Err(err)) => {
+						error!("{err}");
 					}
-				}
+					ControlFlow::Continue(_) | ControlFlow::Break(_) => {}
+				},
 			}
 		}
 

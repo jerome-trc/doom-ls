@@ -35,6 +35,26 @@ pub(crate) use self::data::*;
 
 // Request handling ////////////////////////////////////////////////////////////
 
+pub(super) fn req_semtokens_full(
+	conn: &Connection,
+	sfile: &SourceFile,
+	id: RequestId,
+) -> UnitResult {
+	let Some(parsed) = &sfile.parsed else { unreachable!() };
+	let cursor = SyntaxNode::new_root(parsed.green.clone());
+
+	let resp = Response {
+		id,
+		result: Some(serde_json::to_value(SemanticTokensResult::Tokens(
+			semtokens(cursor, &sfile.lndx),
+		))?),
+		error: None,
+	};
+
+	conn.sender.send(Message::Response(resp))?;
+	Ok(())
+}
+
 pub(super) fn req_semtokens_range(
 	conn: &Connection,
 	sfile: &SourceFile,
@@ -143,7 +163,7 @@ pub(crate) fn rebuild_include_tree(
 
 			let Some(file_id) = ctx
 				.project
-				.get_fileid_z(ZPath::new(&complete))
+				.get_pathid_z(ZPath::new(&complete))
 				 else {
 					tracing::error!("Failed to get interned ZDoom path: `{}`", complete.display());
 					return;

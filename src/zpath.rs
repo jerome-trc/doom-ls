@@ -17,6 +17,11 @@ impl ZPathBuf {
 	pub(crate) fn new(inner: PathBuf) -> Self {
 		Self(inner)
 	}
+
+	#[must_use]
+	pub(crate) fn into_inner(self) -> PathBuf {
+		self.0
+	}
 }
 
 impl PartialEq for ZPathBuf {
@@ -26,6 +31,12 @@ impl PartialEq for ZPathBuf {
 }
 
 impl Eq for ZPathBuf {}
+
+impl PartialEq<ZPath> for ZPathBuf {
+	fn eq(&self, other: &ZPath) -> bool {
+		self.0.as_os_str().eq_ignore_ascii_case(other.0.as_os_str())
+	}
+}
 
 impl Hash for ZPathBuf {
 	fn hash<H: Hasher>(&self, state: &mut H) {
@@ -89,5 +100,35 @@ impl ZPath {
 	#[allow(unused)]
 	pub(crate) fn as_path(&self) -> &Path {
 		&self.0
+	}
+}
+
+impl ToOwned for ZPath {
+	type Owned = ZPathBuf;
+
+	fn to_owned(&self) -> Self::Owned {
+		ZPathBuf(self.0.to_path_buf())
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use crate::FxIndexSet;
+
+	use super::*;
+
+	#[test]
+	fn smoke() {
+		const P_UPPER: &str = "/home/user/zdoom-project/ZSCRIPT.zs";
+		const P_LOWER: &str = "/home/user/zdoom-project/zscript.zs";
+
+		assert_eq!(ZPath::new(P_UPPER), ZPath::new(P_LOWER));
+
+		let mut set = FxIndexSet::default();
+		set.insert(ZPathBuf::from(P_UPPER));
+
+		assert!(set.contains(ZPath::new(P_LOWER)));
+		let i = set.get_index_of(ZPath::new(P_LOWER));
+		assert!(i.is_some());
 	}
 }

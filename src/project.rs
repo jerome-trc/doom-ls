@@ -56,13 +56,22 @@ impl Project {
 			.filter(|file_id| self.files.contains_key(file_id))
 	}
 
+	/// Note that this returns `None` if no source has been registered under
+	/// the file ID corresponding to `path` yet.
 	#[must_use]
 	pub(crate) fn get_fileid_z(&self, path: &ZPath) -> Option<FileId> {
+		self.get_pathid_z(path)
+			.filter(|file_id| self.files.contains_key(file_id))
+	}
+
+	/// A counterpart to [`Self::get_fileid_z`] which does not check for
+	/// the presence of a source file.
+	#[must_use]
+	pub(crate) fn get_pathid_z(&self, path: &ZPath) -> Option<FileId> {
 		self.paths
 			.nocase
 			.get_index_of(path)
 			.map(|i| FileId(i as u32))
-			.filter(|file_id| self.files.contains_key(file_id))
 	}
 
 	pub(crate) fn intern_path(&mut self, path: &Path) -> FileId {
@@ -79,6 +88,11 @@ impl Project {
 		}
 
 		self.paths.intern(pathbuf)
+	}
+
+	#[must_use]
+	pub(crate) fn get_file(&self, file_id: FileId) -> Option<&SourceFile> {
+		self.files.get(&file_id)
 	}
 
 	#[must_use]
