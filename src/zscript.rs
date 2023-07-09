@@ -8,7 +8,7 @@ use std::{
 
 use doomfront::{
 	rowan::{ast::AstNode, GreenNode, Language, NodeOrToken, TextRange, TextSize},
-	zdoom::zscript::{ast, Syn, SyntaxNode},
+	zdoom::zscript::{ast, Syn, SyntaxNode, SyntaxToken},
 };
 use lsp_server::{Connection, Message, RequestId, Response};
 use lsp_types::{
@@ -22,7 +22,8 @@ use tracing::warn;
 
 use crate::{
 	lines::{LineCol, LineIndex, TextDelta},
-	project::{self, FileId, FilePos, ParsedFile, Project, QName, SourceFile, SymbolDelta},
+	names::StringInterner,
+	project::{self, FileId, FilePos, ParsedFile, Project, SourceFile, SymbolDelta},
 	semtokens::Highlighter,
 	util,
 	zpath::ZPath,
@@ -67,28 +68,37 @@ pub(super) fn req_goto(
 		)));
 	};
 
-	if token.kind() != Syn::Ident {
-		// For now, only identifiable things can have "definitions".
-		// TODO: string and name literals can point to all kinds of other things.
-		Core::respond_null(conn, id)?;
-		tracing::debug!("GotoDefinition miss - non-identifier.");
-		return Ok(());
-	}
+	let handler = if token.kind() == Syn::Ident {
+		let parent = token.parent().unwrap();
 
-	let parent = token.parent().unwrap();
+		if token.text().eq_ignore_ascii_case("self") && ast::IdentExpr::can_cast(parent.kind()) {
+			// No useful information to provide here.
+			Core::respond_null(conn, id)?;
+			tracing::debug!("GotoDefinition miss - `self` identifier.");
+			return Ok(());
+		}
 
-	if token.text().eq_ignore_ascii_case("self") && ast::IdentExpr::can_cast(parent.kind()) {
-		// No useful information to provide here.
+		req_goto_ident
+	// For now, only identifiable things can have "definitions".
+	// TODO:
+	// - `Syn::NameLit`, often identifying a class.
+	// - `Syn::StringLit`, which may be coerced to `name` and identify a class.
+	// Also support LANGUAGE IDs, GLDEFS, maybe even CVar names.
+	// - `Syn::KwSuper`; try to go to a parent class definition.
+	// - `Syn::DocComment`; support following intra-doc links.
+	// - `Syn::KwString` / `Syn::KwArray` / `Syn::KwMap` / `Syn::KwMapIterator` /
+	// `Syn::KwColor` / `Syn::KwVector2` / `Syn::KwVector3` by faking their definitions.
+	} else {
 		Core::respond_null(conn, id)?;
-		tracing::debug!("GotoDefinition miss - `self` identifier.");
+		tracing::debug!("GotoDefinition miss - unsupported token.");
 		return Ok(());
-	}
+	};
 
 	// TODO: If the user put in a "go to definition" request on the identifier
 	// making up the declaration, respond with a list of references.
 
 	for i in (0..=ix_project).rev() {
-		match req_goto_ident(&core.projects[i], token.text()) {
+		match handler(core, &core.projects[i], token.clone()) {
 			ControlFlow::Continue(()) => {}
 			ControlFlow::Break(Err(err)) => {
 				return Err(err);
@@ -113,18 +123,24 @@ pub(super) fn req_goto(
 /// - `Continue` if the symbol hasn't been found.
 /// - `Break(Ok)` if the symbol was resolved successfully.
 fn req_goto_ident(
+	core: &Core,
 	project: &Project,
-	name: &str,
+	token: SyntaxToken,
 ) -> ControlFlow<Result<GotoDefinitionResponse, ErrorBox>> {
+	let text = token.text();
+
 	// TODO: Rather than trying every namespace, narrow down based on context.
 
-	if let Some(project::SymbolKey::ZScript(sym_k)) = project.lookup_global(&QName::for_type(name))
+	if let Some(project::SymbolKey::ZScript(sym_k)) =
+		project.lookup_global(&core.strings.type_name_nocase(text))
 	{
-		return goto_symbol(project, sym_k, name);
+		return goto_symbol(project, sym_k, text);
 	}
 
-	if let Some(project::SymbolKey::ZScript(sym_k)) = project.lookup_global(&QName::for_var(name)) {
-		return goto_symbol(project, sym_k, name);
+	if let Some(project::SymbolKey::ZScript(sym_k)) =
+		project.lookup_global(&core.strings.var_name_nocase(text))
+	{
+		return goto_symbol(project, sym_k, text);
 	}
 
 	ControlFlow::Continue(())
@@ -323,7 +339,8 @@ pub(self) fn semtokens(node: SyntaxNode, lndx: &LineIndex) -> SemanticTokens {
 	}
 }
 
-pub(crate) fn symbol_delta(
+pub(crate) fn semantic_update(
+	strings: &StringInterner,
 	storage: &mut Storage,
 	delta: &mut SymbolDelta<SymbolKey>,
 	file_id: FileId,
@@ -350,9 +367,8 @@ pub(crate) fn symbol_delta(
 					},
 				}));
 
-				delta
-					.added
-					.push((QName::for_type(class_name.text()), SymbolKey::Class(dat_k)));
+				let name = strings.type_name_nocase(class_name.text());
+				delta.added.push((name, SymbolKey::Class(dat_k)));
 			}
 			ast::TopLevel::ConstDef(constdef) => {
 				let Ok(const_name) = constdef.name() else { continue; };
@@ -364,10 +380,8 @@ pub(crate) fn symbol_delta(
 					},
 				}));
 
-				delta.added.push((
-					QName::for_var(const_name.text()),
-					SymbolKey::Constant(dat_k),
-				));
+				let name = strings.var_name_nocase(const_name.text());
+				delta.added.push((name, SymbolKey::Constant(dat_k)));
 			}
 			ast::TopLevel::EnumDef(enumdef) => {
 				let Ok(enum_name) = enumdef.name() else { continue; };
@@ -379,9 +393,8 @@ pub(crate) fn symbol_delta(
 					},
 				}));
 
-				delta
-					.added
-					.push((QName::for_type(enum_name.text()), SymbolKey::Enum(dat_k)));
+				let name = strings.type_name_nocase(enum_name.text());
+				delta.added.push((name, SymbolKey::Enum(dat_k)));
 			}
 			ast::TopLevel::MixinClassDef(mixindef) => {
 				let Ok(mixin_name) = mixindef.name() else { continue; };
@@ -393,10 +406,8 @@ pub(crate) fn symbol_delta(
 					},
 				}));
 
-				delta.added.push((
-					QName::for_type(mixin_name.text()),
-					SymbolKey::MixinClass(dat_k),
-				));
+				let name = strings.type_name_nocase(mixin_name.text());
+				delta.added.push((name, SymbolKey::MixinClass(dat_k)));
 			}
 			ast::TopLevel::StructDef(structdef) => {
 				let Ok(struct_name) = structdef.name() else { continue; };
@@ -408,10 +419,8 @@ pub(crate) fn symbol_delta(
 					},
 				}));
 
-				delta.added.push((
-					QName::for_type(struct_name.text()),
-					SymbolKey::Struct(dat_k),
-				));
+				let name = strings.type_name_nocase(struct_name.text());
+				delta.added.push((name, SymbolKey::Struct(dat_k)));
 			}
 			ast::TopLevel::ClassExtend(_)
 			| ast::TopLevel::StructExtend(_)

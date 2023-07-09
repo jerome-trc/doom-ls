@@ -1,3 +1,5 @@
+//! Abstractions for ASCII case-insensitive file paths.
+
 use std::{
 	borrow::Borrow,
 	ffi::OsStr,
@@ -49,7 +51,7 @@ impl Borrow<ZPath> for ZPathBuf {
 	}
 }
 
-impl std::ops::Deref for ZPathBuf {
+impl Deref for ZPathBuf {
 	type Target = ZPath;
 
 	fn deref(&self) -> &Self::Target {
@@ -113,7 +115,7 @@ mod test {
 	use super::*;
 
 	#[test]
-	fn smoke() {
+	fn smoke_paths() {
 		const P_UPPER: &str = "/home/user/zdoom-project/ZSCRIPT.zs";
 		const P_LOWER: &str = "/home/user/zdoom-project/zscript.zs";
 

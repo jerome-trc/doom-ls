@@ -9,6 +9,7 @@ use tracing::error;
 
 use crate::{
 	lines::{LineCol, LineIndex},
+	names::{Name, StringInterner},
 	zpath::{ZPath, ZPathBuf},
 	zscript, FxIndexSet, LangId,
 };
@@ -22,7 +23,7 @@ pub(crate) struct Project {
 	/// notification comes in. It is left until the next time the client makes
 	/// a request, at which point that file's symbols are invalidated.
 	dirty: FxHashSet<FileId>,
-	symbols: FxHashMap<QName, SymbolKey>,
+	symbols: FxHashMap<Name, SymbolKey>,
 	// Languages ///////////////////////////////////////////////////////////////
 	zscript: zscript::Storage,
 }
@@ -113,7 +114,7 @@ impl Project {
 	}
 
 	#[must_use]
-	pub(crate) fn lookup_global(&self, qname: &QName) -> Option<SymbolKey> {
+	pub(crate) fn lookup_global(&self, qname: &Name) -> Option<SymbolKey> {
 		self.symbols.get(qname).copied()
 	}
 
@@ -121,7 +122,7 @@ impl Project {
 		self.dirty.insert(file_id);
 	}
 
-	pub(crate) fn update_global_symbols(&mut self) {
+	pub(crate) fn update_global_symbols(&mut self, strings: &StringInterner) {
 		let all_dirty = self.dirty.drain().collect::<Vec<_>>();
 
 		for file_id in all_dirty {
@@ -140,7 +141,13 @@ impl Project {
 						delta.removed.push((removed.0, sym_k));
 					}
 
-					zscript::symbol_delta(&mut self.zscript, &mut delta, file_id, green);
+					zscript::semantic_update(
+						strings,
+						&mut self.zscript,
+						&mut delta,
+						file_id,
+						green,
+					);
 
 					for removed in delta.removed {
 						self.symbols.remove(&removed.0);
@@ -162,6 +169,7 @@ impl Project {
 	pub(crate) fn on_file_delete(&mut self, path: PathBuf) {
 		if let Some(file_id) = self.get_fileid(&path) {
 			self.files.remove(&file_id);
+			self.dirty.remove(&file_id);
 		}
 	}
 
@@ -220,7 +228,7 @@ pub(crate) struct ParsedFile {
 	/// resolution table. This is used to provide a "symbol delta" for whenever
 	/// this file is changed, so that the entire global map does not have to be
 	/// recomputed.
-	pub(crate) symbols: Vec<(QName, SymbolKey)>,
+	pub(crate) symbols: Vec<(Name, SymbolKey)>,
 }
 
 impl ParsedFile {
@@ -249,26 +257,7 @@ pub(crate) struct FileId(
 	u32,
 );
 
-/// A "qualified name", whose content is tagged with a namespace.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum QName {
-	Type(Box<str>),
-	Variable(Box<str>),
-	// TODO: Symbolic constants, CVars, GLDEF objects, et cetera...
-}
-
-impl QName {
-	#[must_use]
-	pub(crate) fn for_type(string: &str) -> Self {
-		Self::Type(string.to_owned().into_boxed_str())
-	}
-
-	#[must_use]
-	pub(crate) fn for_var(string: &str) -> Self {
-		Self::Variable(string.to_owned().into_boxed_str())
-	}
-}
-
+/// Serves no special purpose; just ties together a [`FileId`] and [`TextSize`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FilePos {
 	pub(crate) file: FileId,
@@ -282,8 +271,8 @@ pub(crate) enum SymbolKey {
 
 #[derive(Debug)]
 pub(crate) struct SymbolDelta<K: Eq + Copy> {
-	pub(crate) removed: Vec<(QName, K)>,
-	pub(crate) added: Vec<(QName, K)>,
+	pub(crate) removed: Vec<(Name, K)>,
+	pub(crate) added: Vec<(Name, K)>,
 }
 
 impl<K: Eq + Copy> Default for SymbolDelta<K> {

@@ -4,6 +4,7 @@
 
 // Common //////////////////////////////////////////////////////////////////////
 mod lines;
+mod names;
 mod notif;
 mod project;
 mod request;
@@ -29,6 +30,7 @@ use lsp_types::{
 	TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
 	TextDocumentSyncSaveOptions, WorkDoneProgressOptions,
 };
+use names::StringInterner;
 use project::{FileId, Project};
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::Serialize;
@@ -127,6 +129,7 @@ fn capabilities() -> ServerCapabilities {
 
 #[derive(Debug)]
 pub(crate) struct Core {
+	pub(crate) strings: StringInterner,
 	pub(crate) projects: Vec<Project>,
 	pub(crate) comms: CommSystem,
 }
@@ -137,6 +140,7 @@ impl Core {
 		let _: InitializeParams = serde_json::from_value(params).unwrap();
 
 		Self {
+			strings: StringInterner::default(),
 			projects: vec![],
 			comms: CommSystem::default(),
 		}
@@ -188,6 +192,12 @@ impl Core {
 			ExtractError::JsonError { method: _, error } => {
 				ControlFlow::Break(Err(Box::new(error)))
 			}
+		}
+	}
+
+	pub(self) fn semantic_update(&mut self) {
+		for project in &mut self.projects {
+			project.update_global_symbols(&self.strings);
 		}
 	}
 
