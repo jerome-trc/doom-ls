@@ -460,7 +460,7 @@ pub(crate) fn rebuild_include_tree(
 			// TODO: Either user-configurable or from the root.
 			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
 		)
-		.into_inner();
+		.into_green();
 
 		let lndx = LineIndex::new(&text);
 		let incpaths = collect_include_paths(ctx, &lndx, green.clone());
@@ -612,7 +612,7 @@ pub(crate) fn full_reparse(sfile: &mut SourceFile) -> UnitResult {
 		doomfront::zdoom::zscript::parse::file,
 		doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
 	)
-	.into_inner();
+	.into_green();
 
 	sfile.parsed = Some(ParsedFile {
 		green,
@@ -678,7 +678,7 @@ fn splice(text: &str, green: GreenNode, changed: (TextRange, TextSize)) -> Green
 			text,
 			parse::file,
 			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
-		).into_inner();
+		).into_green();
 	};
 
 	let parser = match to_reparse.kind() {
@@ -688,7 +688,7 @@ fn splice(text: &str, green: GreenNode, changed: (TextRange, TextSize)) -> Green
 				parse::file,
 				doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
 			)
-			.into_inner();
+			.into_green();
 		}
 		Syn::ClassDef => parse::class_def,
 		Syn::MixinClassDef => parse::mixin_class_def,
@@ -709,7 +709,7 @@ fn splice(text: &str, green: GreenNode, changed: (TextRange, TextSize)) -> Green
 		parser,
 		doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
 	)
-	.into_inner();
+	.into_green();
 
 	green.replace_child(to_reparse.index(), NodeOrToken::Node(new_child))
 }
@@ -734,7 +734,7 @@ class Something : SomethingElse {
 			doomfront::zdoom::zscript::parse::file,
 			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
 		)
-		.into_inner();
+		.into_green();
 
 		const SOURCE_CHANGED: &str = r#"
 

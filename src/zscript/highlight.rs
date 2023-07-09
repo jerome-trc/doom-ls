@@ -315,7 +315,7 @@ class Something : SomethingElse {
 			doomfront::zdoom::zscript::parse::file,
 			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
 		)
-		.into_inner();
+		.into_green();
 
 		let lndx = LineIndex::new(SOURCE);
 		let cursor = SyntaxNode::new_root(green);
