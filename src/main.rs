@@ -115,6 +115,7 @@ fn capabilities() -> ServerCapabilities {
 		)),
 		definition_provider: Some(OneOf::Left(true)),
 		hover_provider: Some(HoverProviderCapability::Simple(true)),
+		references_provider: Some(OneOf::Left(true)),
 		semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
 			SemanticTokensOptions {
 				work_done_progress_options: WorkDoneProgressOptions::default(),

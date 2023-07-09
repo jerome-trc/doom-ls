@@ -7,13 +7,13 @@ use std::{
 };
 
 use doomfront::{
-	rowan::{ast::AstNode, GreenNode, Language, NodeOrToken, TextRange, TextSize},
+	rowan::{ast::AstNode, GreenNode, Language, NodeOrToken, TextRange, TextSize, WalkEvent},
 	zdoom::zscript::{ast, Syn, SyntaxNode, SyntaxToken},
 };
 use lsp_server::{Connection, Message, RequestId, Response};
 use lsp_types::{
 	Diagnostic, DiagnosticSeverity, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
-	LanguageString, MarkedString, Position, SemanticTokens, SemanticTokensRangeResult,
+	LanguageString, Location, MarkedString, Position, SemanticTokens, SemanticTokensRangeResult,
 	SemanticTokensResult,
 };
 use parking_lot::Mutex;
@@ -259,6 +259,111 @@ pub(super) fn req_hover(
 
 	conn.sender.send(Message::Response(resp))?;
 	Ok(())
+}
+
+pub(crate) fn req_references(
+	core: &Core,
+	conn: &Connection,
+	id: RequestId,
+	pos: Position,
+	ix_project: usize,
+	sfile: &SourceFile,
+) -> UnitResult {
+	let parsed = sfile.parsed.as_ref().unwrap();
+	let cursor = SyntaxNode::new_root(parsed.green.clone());
+
+	let linecol = LineCol {
+		line: pos.line,
+		col: pos.character,
+	};
+
+	let Some(boffs) = sfile.lndx.offset(linecol) else {
+		Core::respond_null(conn, id)?;
+
+		return Err(
+			Box::new(MsgError(
+				format!("failed to get token at position {linecol:#?}")
+			))
+		);
+	};
+
+	let Some(token) = cursor.token_at_offset(boffs).next() else {
+		Core::respond_null(conn, id)?;
+
+		return Err(Box::new(MsgError(
+			format!("failed to get token at position {linecol:#?}")
+		)));
+	};
+
+	if token.kind() != Syn::Ident {
+		// TODO:
+		// - Core types (numeric primitives, array, map, et cetera).
+		// - `Syn::NameLit`, often identifying a class.
+		// - `Syn::StringLit`, which may be coerced to `name` and identify a class.
+		// Also support LANGUAGE IDs, GLDEFS, maybe even CVar names.
+		// - `Syn::KwSuper`; try to go to a parent class definition.
+		return Core::respond_null(conn, id);
+	}
+
+	let subvecs = Mutex::new(vec![]);
+	let ident = token.text();
+
+	for i in (0..=ix_project).rev() {
+		let project = &core.projects[i];
+
+		project.all_files_par().for_each(|(file_id, sfile)| {
+			let path = project.get_path(file_id).unwrap();
+			subvecs.lock().push(references_to(sfile, path, ident));
+		});
+	}
+
+	let locations = subvecs
+		.into_inner()
+		.into_iter()
+		.flatten()
+		.collect::<Vec<_>>();
+
+	conn.sender.send(Message::Response(Response {
+		id,
+		result: Some(serde_json::to_value(locations).unwrap()),
+		error: None,
+	}))?;
+
+	Ok(())
+}
+
+#[must_use]
+fn references_to(sfile: &SourceFile, path: &Path, ident: &str) -> Vec<Location> {
+	let Some(parsed) = &sfile.parsed else { return vec![]; };
+	let cursor = SyntaxNode::new_root(parsed.green.clone());
+	let mut ret = vec![];
+
+	for w_ev in cursor.preorder_with_tokens() {
+		let WalkEvent::Enter(elem) = w_ev else { continue; };
+		let NodeOrToken::Token(token) = elem else { continue; };
+
+		if token.text().eq_ignore_ascii_case(ident) {
+			let uri = util::path_to_uri(path).unwrap();
+			let start_lc = sfile.lndx.line_col(token.text_range().start());
+			let end_lc = sfile.lndx.line_col(token.text_range().end());
+
+			ret.push(Location {
+				uri,
+				range: lsp_types::Range {
+					start: Position {
+						line: start_lc.line,
+						character: start_lc.col,
+					},
+					end: Position {
+						line: end_lc.line,
+						character: end_lc.col,
+					},
+				},
+			});
+		}
+	}
+
+	ret
 }
 
 pub(crate) fn req_semtokens_full(

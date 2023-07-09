@@ -4,7 +4,7 @@ use std::ops::ControlFlow;
 
 use lsp_server::{Connection, Request, RequestId};
 use lsp_types::request::{
-	GotoDefinition, HoverRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
+	GotoDefinition, HoverRequest, References, SemanticTokensFullRequest, SemanticTokensRangeRequest,
 };
 
 use crate::{util, zscript, Core, LangId, UnitResult};
@@ -102,6 +102,34 @@ pub(super) fn handle(
 			id,
 			params.text_document_position_params.position,
 			ix_p,
+		)
+	})?;
+
+	req = try_request::<References, _>(req, |id, params| {
+		core.semantic_update();
+		let path = util::uri_to_pathbuf(&params.text_document_position.text_document.uri)?;
+
+		let Some((project, ix_p, file_id)) = core.projects.iter().enumerate().find_map(|(i, p)| {
+			p.get_fileid(&path).map(|file_id| (p, i, file_id))
+		}) else {
+			return Core::respond_null(conn, id);
+		};
+
+		let Some(sfile) = project.get_file(file_id) else {
+			return Core::respond_null(conn, id);
+		};
+
+		let LangId::ZScript = sfile.lang else {
+			return Core::respond_null(conn, id);
+		};
+
+		zscript::req_references(
+			core,
+			conn,
+			id,
+			params.text_document_position.position,
+			ix_p,
+			sfile,
 		)
 	})?;
 

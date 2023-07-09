@@ -4,6 +4,7 @@ use doomfront::{
 	rowan::{GreenNode, SyntaxNode, SyntaxToken, TextSize},
 	LangExt,
 };
+use rayon::prelude::{ParallelBridge, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::error;
 
@@ -116,6 +117,15 @@ impl Project {
 	#[must_use]
 	pub(crate) fn lookup_global(&self, qname: &Name) -> Option<SymbolKey> {
 		self.symbols.get(qname).copied()
+	}
+
+	pub(crate) fn all_files(&self) -> impl Iterator<Item = (FileId, &SourceFile)> {
+		self.files.iter().map(|t| (*t.0, t.1))
+	}
+
+	#[must_use = "iterators are lazy and do nothing unless consumed"]
+	pub(crate) fn all_files_par(&self) -> impl ParallelIterator<Item = (FileId, &SourceFile)> {
+		self.all_files().par_bridge()
 	}
 
 	pub(crate) fn set_dirty(&mut self, file_id: FileId) {
