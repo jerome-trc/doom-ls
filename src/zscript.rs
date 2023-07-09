@@ -1,5 +1,5 @@
-mod data;
 mod highlight;
+mod sema;
 
 use std::{
 	ops::ControlFlow,
@@ -30,7 +30,7 @@ use crate::{
 	Core, ErrorBox, LangId, MsgError, UnitResult,
 };
 
-pub(crate) use self::data::*;
+pub(crate) use self::sema::*;
 
 // Request handling ////////////////////////////////////////////////////////////
 

@@ -1,3 +1,5 @@
+//! Infrastructure for semantic representation of ZScript source.
+
 use slotmap::SlotMap;
 
 use crate::project::FilePos;
