@@ -291,6 +291,13 @@ impl Core {
 	}
 
 	#[must_use]
+	fn find_project_by_child(&self, path: &Path) -> Option<&Project> {
+		self.projects
+			.iter()
+			.find(|project| util::path_is_child_of(path, project.root()))
+	}
+
+	#[must_use]
 	fn find_project_by_child_mut(&mut self, path: &Path) -> Option<&mut Project> {
 		self.projects
 			.iter_mut()

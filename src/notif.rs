@@ -8,7 +8,7 @@ use lsp_types::{
 		DidChangeConfiguration, DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument,
 		DidSaveTextDocument, PublishDiagnostics,
 	},
-	FileChangeType, PublishDiagnosticsParams,
+	Diagnostic, DiagnosticSeverity, FileChangeType, Position, PublishDiagnosticsParams, Url,
 };
 use tracing::debug;
 
@@ -153,12 +153,28 @@ pub(super) fn handle(
 	notif = try_notif::<DidOpenTextDocument, _>(notif, |params| {
 		let path = util::uri_to_pathbuf(&params.text_document.uri)?;
 
-		let Some((project, file_id)) = core.find_project_by_path_mut(&path) else {
+		let Some((project, file_id)) = core.find_project_by_path(&path) else {
+			if core.find_project_by_child(&path).is_some() {
+				match params.text_document.language_id.as_str() {
+					"zscript" => {
+						conn.sender.send(Message::Notification(
+							unincluded_diag_notif(params.text_document.uri, "ZScript")
+						))?;
+					}
+					"decorate" => {
+						conn.sender.send(Message::Notification(
+							unincluded_diag_notif(params.text_document.uri, "DECORATE")
+						))?;
+					},
+					_ => {}
+				}
+			}
+
 			// The user opened a file outside the load order. Nothing to do here.
 			return Ok(());
 		};
 
-		let Some(sfile) = project.get_file_mut(file_id) else {
+		let Some(sfile) = project.get_file(file_id) else {
 			// The opened file falls under the purview of the load order,
 			// but it is of an unsupported language. Nothing to do here.
 			return Ok(());
@@ -181,6 +197,45 @@ pub(super) fn handle(
 	})?;
 
 	ControlFlow::Continue(notif)
+}
+
+/// When the user opens a file which is
+/// - a child of one of the projects
+/// - having ZScript or DECORATE content
+/// - not a part of that project's ZScript or DECORATE include tree
+/// Send a diagnostic to tell them that DoomLS will have no functionality to offer.
+#[must_use]
+fn unincluded_diag_notif(uri: Url, lang_name: &'static str) -> Notification {
+	let diag = Diagnostic {
+		range: lsp_types::Range {
+			start: Position {
+				line: 0,
+				character: 0,
+			},
+			end: Position {
+				line: 0,
+				character: 0,
+			},
+		},
+		severity: Some(DiagnosticSeverity::HINT),
+		code: None,
+		code_description: None,
+		source: Some("doomls".to_string()),
+		message: format!("file not part of {lang_name} include tree - DoomLS will do nothing"),
+		related_information: None,
+		tags: None,
+		data: None,
+	};
+
+	Notification {
+		method: <PublishDiagnostics as lsp_types::notification::Notification>::METHOD.to_string(),
+		params: serde_json::to_value(PublishDiagnosticsParams {
+			uri,
+			diagnostics: vec![diag],
+			version: None,
+		})
+		.unwrap(),
+	}
 }
 
 #[must_use]
