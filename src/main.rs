@@ -2,7 +2,7 @@
 //!
 //! A language server covering domain-specific languages written for Doom's source ports.
 
-// Common //////////////////////////////////////////////////////////////////////
+mod langs;
 mod lines;
 mod names;
 mod notif;
@@ -11,8 +11,6 @@ mod request;
 mod semtokens;
 mod util;
 mod zpath;
-// Languages ///////////////////////////////////////////////////////////////////
-mod zscript;
 
 use std::{
 	collections::VecDeque,
@@ -41,6 +39,8 @@ use tracing_subscriber::{
 	prelude::__tracing_subscriber_SubscriberExt,
 	util::SubscriberInitExt,
 };
+
+pub(crate) use self::langs::*;
 
 fn main() -> UnitResult {
 	let timer = Uptime::default();

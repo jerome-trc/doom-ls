@@ -36,7 +36,7 @@ pub(crate) use self::sema::*;
 
 // Request handling ////////////////////////////////////////////////////////////
 
-pub(super) fn req_goto(
+pub(crate) fn req_goto(
 	core: &Core,
 	conn: &Connection,
 	sfile: &SourceFile,
@@ -192,7 +192,7 @@ fn goto_symbol(
 	}
 }
 
-pub(super) fn req_hover(
+pub(crate) fn req_hover(
 	conn: &Connection,
 	sfile: &SourceFile,
 	id: RequestId,
