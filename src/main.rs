@@ -15,6 +15,7 @@ mod zpath;
 mod zscript;
 
 use std::{
+	collections::VecDeque,
 	hash::BuildHasherDefault,
 	ops::ControlFlow,
 	path::{Path, PathBuf},
@@ -89,6 +90,7 @@ fn main() -> UnitResult {
 			};
 
 			core.build_project_list(string_array);
+			core.init = true;
 			Ok(())
 		},
 	)?;
@@ -130,6 +132,11 @@ fn capabilities() -> ServerCapabilities {
 
 #[derive(Debug)]
 pub(crate) struct Core {
+	/// Is `false` when the application starts and only gets set to `true` when
+	/// the client provides the `doomls.loadOrder` config for the first time.
+	/// Until then, requests get back-logged in `comms` so they can be processed
+	/// when the server has its full necessary context.
+	pub(crate) init: bool,
 	pub(crate) strings: StringInterner,
 	pub(crate) projects: Vec<Project>,
 	pub(crate) comms: CommSystem,
@@ -141,6 +148,7 @@ impl Core {
 		let _: InitializeParams = serde_json::from_value(params).unwrap();
 
 		Self {
+			init: false,
 			strings: StringInterner::default(),
 			projects: vec![],
 			comms: CommSystem::default(),
@@ -160,11 +168,14 @@ impl Core {
 						continue;
 					}
 
-					match request::handle(self, &conn, req) {
-						ControlFlow::Break(Err(err)) => {
-							error!("{err}");
+					if self.init {
+						while let Some(r) = self.comms.backlog_reqs.pop_front() {
+							self.process_request(&conn, r);
 						}
-						ControlFlow::Continue(_) | ControlFlow::Break(_) => {}
+
+						self.process_request(&conn, req);
+					} else {
+						self.backlog_request(req);
 					}
 				}
 				lsp_server::Message::Response(resp) => {
@@ -174,17 +185,55 @@ impl Core {
 						error!("{err}");
 					}
 				}
-				lsp_server::Message::Notification(notif) => match notif::handle(self, &conn, notif)
-				{
-					ControlFlow::Break(Err(err)) => {
-						error!("{err}");
+				lsp_server::Message::Notification(notif) => {
+					if self.init {
+						while let Some(n) = self.comms.backlog_notifs.pop_front() {
+							self.process_notif(&conn, n);
+						}
+
+						self.process_notif(&conn, notif);
+					} else {
+						self.backlog_notif(notif);
 					}
-					ControlFlow::Continue(_) | ControlFlow::Break(_) => {}
-				},
+				}
 			}
 		}
 
 		Ok(())
+	}
+
+	fn process_request(&mut self, conn: &Connection, req: Request) {
+		match request::handle(self, conn, req) {
+			ControlFlow::Break(Err(err)) => {
+				error!("{err}");
+			}
+			ControlFlow::Continue(_) | ControlFlow::Break(_) => {}
+		}
+	}
+
+	fn backlog_request(&mut self, req: Request) {
+		use lsp_types::request::Request as RequestTrait;
+
+		if req.method.as_str() == lsp_types::request::SemanticTokensFullRequest::METHOD {
+			self.comms.backlog_reqs.push_back(req);
+		}
+	}
+
+	fn process_notif(&mut self, conn: &Connection, notif: Notification) {
+		match notif::handle(self, conn, notif) {
+			ControlFlow::Break(Err(err)) => {
+				error!("{err}");
+			}
+			ControlFlow::Continue(_) | ControlFlow::Break(_) => {}
+		}
+	}
+
+	fn backlog_notif(&mut self, notif: Notification) {
+		use lsp_types::notification::Notification as NotificationTrait;
+
+		if notif.method.as_str() == lsp_types::notification::DidOpenTextDocument::METHOD {
+			self.comms.backlog_notifs.push_back(notif);
+		}
 	}
 
 	#[must_use]
@@ -332,6 +381,8 @@ impl Core {
 struct CommSystem {
 	next_id: i32,
 	egress: FxHashMap<RequestId, ResponseCallback>,
+	backlog_reqs: VecDeque<Request>,
+	backlog_notifs: VecDeque<Notification>,
 }
 
 impl CommSystem {
