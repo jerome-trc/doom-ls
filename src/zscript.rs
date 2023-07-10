@@ -6,9 +6,11 @@ use std::{
 	path::{Path, PathBuf},
 };
 
+pub(crate) use doomfront::zdoom::zscript::Syn;
 use doomfront::{
 	rowan::{ast::AstNode, GreenNode, Language, NodeOrToken, TextRange, TextSize, WalkEvent},
-	zdoom::zscript::{ast, Syn, SyntaxNode, SyntaxToken},
+	zdoom::zscript::{ast, SyntaxNode, SyntaxToken},
+	ParseError,
 };
 use lsp_server::{Connection, Message, RequestId, Response};
 use lsp_types::{
@@ -23,7 +25,7 @@ use tracing::warn;
 use crate::{
 	lines::{LineCol, LineIndex, TextDelta},
 	names::StringInterner,
-	project::{self, FileId, FilePos, ParsedFile, Project, SourceFile, SymbolDelta},
+	project::{self, FileId, FilePos, ParseErrors, ParsedFile, Project, SourceFile, SymbolDelta},
 	semtokens::Highlighter,
 	util,
 	zpath::ZPath,
@@ -559,13 +561,13 @@ pub(crate) fn rebuild_include_tree(
 	}
 
 	fn recur(ctx: Context, base: &Path, path: PathBuf, text: String) {
-		let green = doomfront::parse(
+		let (green, errors) = doomfront::parse(
 			&text,
 			doomfront::zdoom::zscript::parse::file,
 			// TODO: Either user-configurable or from the root.
 			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
 		)
-		.into_green();
+		.into_inner();
 
 		let lndx = LineIndex::new(&text);
 		let incpaths = collect_include_paths(ctx, &lndx, green.clone());
@@ -624,6 +626,7 @@ pub(crate) fn rebuild_include_tree(
 				parsed: Some(ParsedFile {
 					green,
 					symbols: vec![],
+					errors: ParseErrors::ZScript(errors),
 				}),
 			},
 		});
@@ -712,27 +715,27 @@ pub(crate) fn rebuild_include_tree(
 }
 
 pub(crate) fn full_reparse(sfile: &mut SourceFile) -> UnitResult {
-	let green = doomfront::parse(
+	let (green, errors) = doomfront::parse(
 		&sfile.text,
 		doomfront::zdoom::zscript::parse::file,
 		doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
 	)
-	.into_green();
+	.into_inner();
 
 	sfile.parsed = Some(ParsedFile {
 		green,
 		symbols: vec![],
+		errors: ParseErrors::ZScript(errors),
 	});
 
 	Ok(())
 }
 
+#[allow(unused)]
 pub(crate) fn partial_reparse(
 	sfile: &mut SourceFile,
 	deltas: impl Iterator<Item = TextDelta>,
 ) -> UnitResult {
-	let Some(parsed) = sfile.parsed.as_mut() else { unreachable!() };
-
 	for delta in deltas {
 		let start_lc = LineCol {
 			line: delta.range.start.line,
@@ -753,9 +756,8 @@ pub(crate) fn partial_reparse(
 			.offset(end_lc)
 			.ok_or(MsgError("invalid range end".to_string()))?;
 
-		parsed.green = splice(
-			&sfile.text,
-			parsed.green.clone(),
+		splice(
+			sfile,
 			(
 				TextRange::new(start, end),
 				TextSize::from(delta.new_text_len as u32),
@@ -768,32 +770,43 @@ pub(crate) fn partial_reparse(
 
 /// `text` must be the file's entire content.
 /// `green` must be tagged [`Syn::Root`]; the returned node is tagged as such too.
-#[must_use]
-fn splice(text: &str, green: GreenNode, changed: (TextRange, TextSize)) -> GreenNode {
+fn splice(sfile: &mut SourceFile, changed: (TextRange, TextSize)) {
 	use doomfront::zdoom::zscript::parse;
 
-	let cursor = SyntaxNode::new_root(green.clone());
+	let Some(parsed) = sfile.parsed.as_mut() else { unreachable!() };
+	let ParseErrors::ZScript(errors) = &mut parsed.errors;
+	let cursor = SyntaxNode::new_root(parsed.green.clone());
 
 	let to_reparse = cursor
 		.children()
 		.find(|node| node.text_range().contains_range(changed.0));
 
 	let Some(to_reparse) = to_reparse else {
-		return doomfront::parse(
-			text,
+		let (green, errs) =
+
+		doomfront::parse(
+			&sfile.text,
 			parse::file,
 			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
-		).into_green();
+		).into_inner();
+
+		*errors = errs;
+		parsed.green = green;
+		return;
 	};
 
 	let parser = match to_reparse.kind() {
 		Syn::Error => {
-			return doomfront::parse(
-				text,
+			let (green, errs) = doomfront::parse(
+				&sfile.text,
 				parse::file,
 				doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
 			)
-			.into_green();
+			.into_inner();
+
+			*errors = errs;
+			parsed.green = green;
+			return;
 		}
 		Syn::ClassDef => parse::class_def,
 		Syn::MixinClassDef => parse::mixin_class_def,
@@ -807,16 +820,76 @@ fn splice(text: &str, green: GreenNode, changed: (TextRange, TextSize)) -> Green
 	};
 
 	let old_range = to_reparse.text_range();
-	let new_end = old_range.end().min(changed.0.start() + changed.1);
 
-	let new_child = doomfront::parse(
-		&text[TextRange::new(old_range.start(), new_end + TextSize::from(1))],
+	let new_range = if changed.1 > changed.0.len() {
+		TextRange::new(old_range.start(), old_range.end() + changed.1)
+	} else {
+		TextRange::new(old_range.start(), old_range.end() - changed.0.len())
+	};
+
+	errors.retain(|error| !new_range.contains_range(error.found().text_range()));
+
+	let (new_child, mut errs) = doomfront::parse(
+		&sfile.text[new_range],
 		parser,
 		doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
 	)
-	.into_green();
+	.into_inner();
 
-	green.replace_child(to_reparse.index(), NodeOrToken::Node(new_child))
+	errors.append(&mut errs);
+
+	parsed.green = parsed
+		.green
+		.replace_child(to_reparse.index(), NodeOrToken::Node(new_child));
+
+	debug_assert_eq!(parsed.green.kind(), Syn::kind_to_raw(Syn::Root));
+}
+
+#[must_use]
+pub(crate) fn parse_errors_to_diags(
+	sfile: &SourceFile,
+	errors: &Vec<ParseError<Syn>>,
+) -> Vec<Diagnostic> {
+	let mut ret = Vec::with_capacity(errors.len());
+
+	for error in errors {
+		let offs_range = error.found().text_range();
+		let start_lc = sfile.lndx.line_col(offs_range.start());
+		let end_lc = sfile.lndx.line_col(offs_range.end());
+
+		ret.push(Diagnostic {
+			range: lsp_types::Range {
+				start: Position {
+					line: start_lc.line,
+					character: start_lc.col,
+				},
+				end: Position {
+					line: end_lc.line,
+					character: end_lc.col,
+				},
+			},
+			severity: Some(DiagnosticSeverity::ERROR),
+			code: None,
+			code_description: None,
+			source: Some("doomls-parser".to_string()),
+			message: {
+				let mut msg = "Expected one of the following:".to_string();
+
+				for expected in error.expected() {
+					msg.push_str("\r\n");
+					msg.push_str("- ");
+					msg.push_str(expected);
+				}
+
+				msg
+			},
+			related_information: None,
+			tags: None,
+			data: None,
+		});
+	}
+
+	ret
 }
 
 #[cfg(test)]
@@ -824,41 +897,114 @@ mod test {
 	use super::*;
 
 	#[test]
-	fn smoke_splicing_reparse() {
-		const SOURCE: &str = r#"
+	fn smoke_partial_reparse() {
+		const SOURCE: &str = r#"/// A mixin class that does something.
+mixin class doomls_Pickup
+{
+	Default
+	{
+		+FLAGSET
+	}
+\
+}"#;
 
-/// This class undoubtedly does something remarkable.
-class Something : SomethingElse {
-	private uint a_field;
-}
-
-"#;
-
-		let green = doomfront::parse(
+		let (green, errors) = doomfront::parse(
 			SOURCE,
 			doomfront::zdoom::zscript::parse::file,
 			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
 		)
-		.into_green();
+		.into_inner();
 
-		const SOURCE_CHANGED: &str = r#"
+		let mut sfile = SourceFile {
+			lang: LangId::ZScript,
+			text: SOURCE.to_string(),
+			lndx: LineIndex::new(SOURCE),
+			parsed: Some(ParsedFile {
+				green,
+				symbols: vec![],
+				errors: ParseErrors::ZScript(errors),
+			}),
+		};
 
-/// This class undoubtedly does something remarkable.
-class Something : SomethingElse {}
+		let removed = sfile.text.remove(93);
+		assert_eq!(removed, '\\');
+		sfile.lndx = LineIndex::new(&sfile.text);
 
-"#;
-
-		let mut source = SOURCE.to_string();
-		source.replace_range(89..113, "");
-		assert_eq!(source, SOURCE_CHANGED);
-
-		let _ = splice(
-			&source,
-			green,
-			(
-				TextRange::new(TextSize::from(89), TextSize::from(113)),
-				TextSize::from(0),
-			),
+		let result = partial_reparse(
+			&mut sfile,
+			[TextDelta {
+				range: lsp_types::Range {
+					start: Position {
+						line: 7,
+						character: 0,
+					},
+					end: Position {
+						line: 7,
+						character: 1,
+					},
+				},
+				new_text_len: 0,
+			}]
+			.into_iter(),
 		);
+
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn partial_reparse_errors() {
+		const SOURCE: &str = r#"/// A mixin class that does something.
+mixin class doomls_Pickup
+{
+	Default
+	{
+		+FLAGSET
+	}
+
+	meta Actor a
+}"#;
+
+		let (green, errors) = doomfront::parse(
+			SOURCE,
+			doomfront::zdoom::zscript::parse::file,
+			doomfront::zdoom::lex::Context::ZSCRIPT_LATEST,
+		)
+		.into_inner();
+
+		let mut sfile = SourceFile {
+			lang: LangId::ZScript,
+			text: SOURCE.to_string(),
+			lndx: LineIndex::new(SOURCE),
+			parsed: Some(ParsedFile {
+				green,
+				symbols: vec![],
+				errors: ParseErrors::ZScript(errors),
+			}),
+		};
+
+		assert_eq!(sfile.parse_diagnostics().len(), 1);
+		sfile.text.insert(107, ';');
+		sfile.lndx = LineIndex::new(&sfile.text);
+
+		let result = partial_reparse(
+			&mut sfile,
+			[TextDelta {
+				range: lsp_types::Range {
+					start: Position {
+						line: 8,
+						character: 12,
+					},
+					end: Position {
+						line: 8,
+						character: 12,
+					},
+				},
+				new_text_len: 1,
+			}]
+			.into_iter(),
+		);
+
+		assert!(result.is_ok());
+		assert!(sfile.parse_diagnostics().is_empty());
 	}
 }

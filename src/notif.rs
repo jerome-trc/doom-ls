@@ -2,12 +2,13 @@
 
 use std::ops::ControlFlow;
 
-use lsp_server::Notification;
+use lsp_server::{Connection, Message, Notification};
 use lsp_types::{
 	notification::{
-		DidChangeConfiguration, DidChangeTextDocument, DidChangeWatchedFiles, DidSaveTextDocument,
+		DidChangeConfiguration, DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument,
+		DidSaveTextDocument, PublishDiagnostics,
 	},
-	FileChangeType,
+	FileChangeType, PublishDiagnosticsParams,
 };
 use tracing::debug;
 
@@ -19,6 +20,7 @@ use crate::{
 
 pub(super) fn handle(
 	core: &mut Core,
+	conn: &Connection,
 	mut notif: Notification,
 ) -> ControlFlow<UnitResult, Notification> {
 	notif = try_notif::<DidChangeTextDocument, _>(notif, |params| {
@@ -40,10 +42,10 @@ pub(super) fn handle(
 		// TODO: Try reducing how many times the line index needs to be recomputed.
 		sfile.lndx = LineIndex::new(&sfile.text);
 
-		let result = if let Some(deltas) = deltas {
+		let result = if let Some(_deltas) = deltas {
 			match sfile.lang {
 				LangId::Unknown => Ok(()),
-				LangId::ZScript => zscript::partial_reparse(sfile, deltas),
+				LangId::ZScript => zscript::full_reparse(sfile),
 			}
 		} else {
 			match sfile.lang {
@@ -51,6 +53,19 @@ pub(super) fn handle(
 				LangId::ZScript => zscript::full_reparse(sfile),
 			}
 		};
+
+		let diags = sfile.parse_diagnostics();
+
+		conn.sender.send(Message::Notification(Notification {
+			method: <PublishDiagnostics as lsp_types::notification::Notification>::METHOD
+				.to_string(),
+			params: serde_json::to_value(PublishDiagnosticsParams {
+				uri: params.text_document.uri,
+				diagnostics: diags,
+				version: None,
+			})
+			.unwrap(),
+		}))?;
 
 		project.set_dirty(file_id);
 		result
@@ -131,6 +146,36 @@ pub(super) fn handle(
 			let _ = zscript::rebuild_include_tree(project, path);
 			// TODO: Handle error, emit diagnostics.
 		}
+
+		Ok(())
+	})?;
+
+	notif = try_notif::<DidOpenTextDocument, _>(notif, |params| {
+		let path = util::uri_to_pathbuf(&params.text_document.uri)?;
+
+		let Some((project, file_id)) = core.find_project_by_path_mut(&path) else {
+			// The user opened a file outside the load order. Nothing to do here.
+			return Ok(());
+		};
+
+		let Some(sfile) = project.get_file_mut(file_id) else {
+			// The opened file falls under the purview of the load order,
+			// but it is of an unsupported language. Nothing to do here.
+			return Ok(());
+		};
+
+		let diags = sfile.parse_diagnostics();
+
+		conn.sender.send(Message::Notification(Notification {
+			method: <PublishDiagnostics as lsp_types::notification::Notification>::METHOD
+				.to_string(),
+			params: serde_json::to_value(PublishDiagnosticsParams {
+				uri: params.text_document.uri,
+				diagnostics: diags,
+				version: None,
+			})
+			.unwrap(),
+		}))?;
 
 		Ok(())
 	})?;

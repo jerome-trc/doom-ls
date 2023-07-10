@@ -2,8 +2,9 @@ use std::path::{Path, PathBuf};
 
 use doomfront::{
 	rowan::{GreenNode, SyntaxNode, SyntaxToken, TextSize},
-	LangExt,
+	LangExt, ParseError,
 };
+use lsp_types::Diagnostic;
 use rayon::prelude::{ParallelBridge, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::error;
@@ -231,6 +232,17 @@ pub(crate) struct SourceFile {
 	pub(crate) parsed: Option<ParsedFile>,
 }
 
+impl SourceFile {
+	#[must_use]
+	pub(crate) fn parse_diagnostics(&self) -> Vec<Diagnostic> {
+		let Some(parsed) = &self.parsed else { return vec![]; };
+
+		match &parsed.errors {
+			ParseErrors::ZScript(errors) => zscript::parse_errors_to_diags(self, errors),
+		}
+	}
+}
+
 #[derive(Debug)]
 pub(crate) struct ParsedFile {
 	pub(crate) green: GreenNode,
@@ -239,6 +251,7 @@ pub(crate) struct ParsedFile {
 	/// this file is changed, so that the entire global map does not have to be
 	/// recomputed.
 	pub(crate) symbols: Vec<(Name, SymbolKey)>,
+	pub(crate) errors: ParseErrors,
 }
 
 impl ParsedFile {
@@ -266,6 +279,11 @@ pub(crate) struct FileId(
 	/// Corresponds to an element in [`PathInterner`].
 	u32,
 );
+
+#[derive(Debug)]
+pub enum ParseErrors {
+	ZScript(Vec<ParseError<zscript::Syn>>),
+}
 
 /// Serves no special purpose; just ties together a [`FileId`] and [`TextSize`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

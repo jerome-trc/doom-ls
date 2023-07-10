@@ -174,7 +174,8 @@ impl Core {
 						error!("{err}");
 					}
 				}
-				lsp_server::Message::Notification(notif) => match notif::handle(self, notif) {
+				lsp_server::Message::Notification(notif) => match notif::handle(self, &conn, notif)
+				{
 					ControlFlow::Break(Err(err)) => {
 						error!("{err}");
 					}
