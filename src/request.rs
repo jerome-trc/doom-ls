@@ -28,8 +28,12 @@ pub(super) fn handle(
 			return Core::respond_null(conn, id);
 		};
 
+		let ix_project = core.project_index(project);
+
 		match sfile.lang {
-			LangId::ZScript => zscript::req_semtokens_range(conn, sfile, id, params.range),
+			LangId::ZScript => {
+				zscript::req_semtokens_range(core, conn, ix_project, sfile, id, params.range)
+			}
 			_ => Core::respond_null(conn, id),
 		}
 	})?;
@@ -64,8 +68,10 @@ pub(super) fn handle(
 			return Core::respond_null(conn, id);
 		};
 
+		let ix_project = core.project_index(project);
+
 		match sfile.lang {
-			LangId::ZScript => zscript::req_semtokens_full(conn, sfile, id),
+			LangId::ZScript => zscript::req_semtokens_full(core, conn, ix_project, sfile, id),
 			_ => Core::respond_null(conn, id),
 		}
 	})?;

@@ -129,6 +129,21 @@ impl Project {
 		self.all_files().par_bridge()
 	}
 
+	#[must_use]
+	pub(crate) fn backwards_lookup(
+		projects: &[Self],
+		from: usize,
+		name: Name,
+	) -> Option<(&Project, SymbolKey)> {
+		for project in &mut projects[..=from].iter().rev() {
+			if let Some(sym_k) = project.symbols.get(&name) {
+				return Some((project, *sym_k));
+			}
+		}
+
+		None
+	}
+
 	pub(crate) fn set_dirty(&mut self, file_id: FileId) {
 		self.dirty.insert(file_id);
 	}
@@ -152,11 +167,13 @@ impl Project {
 						delta.removed.push((removed.0, sym_k));
 					}
 
-					zscript::semantic_update(
-						strings,
-						&mut self.zscript,
-						&mut delta,
-						file_id,
+					zscript::sema::update(
+						zscript::sema::UpdateContext {
+							strings,
+							storage: &mut self.zscript,
+							delta: &mut delta,
+							file_id,
+						},
 						green,
 					);
 

@@ -54,7 +54,7 @@ impl StringInterner {
 pub(crate) struct StringKey(u32);
 
 /// A [`StringKey`] tagged with a namespace.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Name {
 	Type(StringKey),
 	Variable(StringKey),

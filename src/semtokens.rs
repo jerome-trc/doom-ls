@@ -1,18 +1,21 @@
 //! Abstractions over [`lsp_types::SemanticToken`] and [`lsp_types::SemanticTokenModifier`].
 
 use doomfront::rowan::TextRange;
-use lsp_types::{SemanticTokenModifier, SemanticTokenType, SemanticTokensLegend};
+use lsp_types::{SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokensLegend};
 
 use crate::lines::LineIndex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SemToken {
+	Class,
 	Comment,
 	Constant,
 	Enum,
 	Function,
 	Keyword,
+	Macro,
 	Method,
+	Namespace,
 	Number,
 	Operator,
 	Param,
@@ -26,12 +29,15 @@ pub(crate) enum SemToken {
 impl From<SemToken> for SemanticTokenType {
 	fn from(value: SemToken) -> Self {
 		match value {
+			SemToken::Class => Self::CLASS,
 			SemToken::Comment => Self::COMMENT,
 			SemToken::Constant => Self::ENUM_MEMBER,
 			SemToken::Enum => Self::ENUM,
 			SemToken::Function => Self::FUNCTION,
 			SemToken::Keyword => Self::KEYWORD,
+			SemToken::Macro => Self::MACRO,
 			SemToken::Method => Self::METHOD,
+			SemToken::Namespace => Self::NAMESPACE,
 			SemToken::Number => Self::NUMBER,
 			SemToken::Operator => Self::OPERATOR,
 			SemToken::Param => Self::PARAMETER,
@@ -46,18 +52,19 @@ impl From<SemToken> for SemanticTokenType {
 
 bitflags::bitflags! {
 	#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-	pub(crate) struct SemTokenFlags: u32 {
+	pub(crate) struct SemTokenFlags: u8 {
 		const DEPRECATED = 1 << 0;
 		const READONLY = 1 << 1;
-		const CONTROL_FLOW = 1 << 2;
+		const MEMBER = 1 << 2;
+		const CONTROL_FLOW = 1 << 3;
 	}
 }
 
 pub(crate) struct Highlighter<'li> {
-	pub(crate) lndx: &'li LineIndex,
-	pub(crate) tokens: Vec<lsp_types::SemanticToken>,
-	pub(crate) prev_line: u32,
-	pub(crate) prev_col: u32,
+	lndx: &'li LineIndex,
+	tokens: Vec<SemanticToken>,
+	prev_line: u32,
+	prev_col: u32,
 }
 
 impl<'li> Highlighter<'li> {
@@ -72,11 +79,11 @@ impl<'li> Highlighter<'li> {
 	}
 
 	pub(crate) fn advance_mod(&mut self, semtok: SemToken, range: TextRange, flags: SemTokenFlags) {
-		self.advance_impl(semtok, range, flags.bits());
+		self.advance_impl(semtok, range, flags.bits() as u32);
 	}
 
 	pub(crate) fn advance(&mut self, semtok: SemToken, range: TextRange) {
-		self.advance_impl(semtok, range, SemTokenFlags::empty().bits())
+		self.advance_impl(semtok, range, SemTokenFlags::empty().bits() as u32)
 	}
 
 	fn advance_impl(&mut self, semtok: SemToken, range: TextRange, bits: u32) {
@@ -91,7 +98,7 @@ impl<'li> Highlighter<'li> {
 			}
 		}
 
-		self.tokens.push(lsp_types::SemanticToken {
+		self.tokens.push(SemanticToken {
 			delta_line: c.line,
 			delta_start: c.col,
 			length: range.len().into(),
@@ -102,18 +109,26 @@ impl<'li> Highlighter<'li> {
 		self.prev_line = linecol.line;
 		self.prev_col = linecol.col;
 	}
+
+	#[must_use]
+	pub(crate) fn finish(self) -> Vec<SemanticToken> {
+		self.tokens
+	}
 }
 
 #[must_use]
 pub(crate) fn legend() -> SemanticTokensLegend {
 	// Ordering must match that of `SemToken`.
 	let types = vec![
+		SemToken::Class.into(),
 		SemToken::Comment.into(),
 		SemToken::Constant.into(),
 		SemToken::Enum.into(),
 		SemToken::Function.into(),
 		SemToken::Keyword.into(),
+		SemToken::Macro.into(),
 		SemToken::Method.into(),
+		SemToken::Namespace.into(),
 		SemToken::Number.into(),
 		SemToken::Operator.into(),
 		SemToken::Param.into(),
@@ -127,6 +142,7 @@ pub(crate) fn legend() -> SemanticTokensLegend {
 	let modifiers = vec![
 		SemanticTokenModifier::DEPRECATED,
 		SemanticTokenModifier::READONLY,
+		SemanticTokenModifier::new("member"),
 		SemanticTokenModifier::new("controlFlow"),
 	];
 

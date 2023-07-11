@@ -1,5 +1,9 @@
-mod highlight;
-mod sema;
+//! Request and notification handling for ZDoom's [ZScript] language.
+//!
+//! [ZScript]: doomfront::zdoom::zscript
+
+pub(crate) mod highlight;
+pub(crate) mod sema;
 
 use std::{
 	ops::ControlFlow,
@@ -23,8 +27,7 @@ use rayon::prelude::*;
 
 use crate::{
 	lines::{LineCol, LineIndex, TextDelta},
-	names::StringInterner,
-	project::{self, FileId, FilePos, ParseErrors, ParsedFile, Project, SourceFile, SymbolDelta},
+	project::{self, ParseErrors, ParsedFile, Project, SourceFile},
 	semtokens::Highlighter,
 	util,
 	zpath::ZPath,
@@ -360,7 +363,9 @@ fn references_to(sfile: &SourceFile, path: &Path, ident: &str) -> Vec<Location> 
 }
 
 pub(crate) fn req_semtokens_full(
+	core: &Core,
 	conn: &Connection,
+	ix_project: usize,
 	sfile: &SourceFile,
 	id: RequestId,
 ) -> UnitResult {
@@ -370,8 +375,16 @@ pub(crate) fn req_semtokens_full(
 	let resp = Response {
 		id,
 		result: Some(
-			serde_json::to_value(SemanticTokensResult::Tokens(semtokens(cursor, &sfile.lndx)))
-				.unwrap(),
+			serde_json::to_value(SemanticTokensResult::Tokens(SemanticTokens {
+				result_id: None,
+				data: highlight::Context {
+					core,
+					ix_project,
+					hl: Highlighter::new(&sfile.lndx),
+				}
+				.traverse(cursor),
+			}))
+			.unwrap(),
 		),
 		error: None,
 	};
@@ -381,7 +394,9 @@ pub(crate) fn req_semtokens_full(
 }
 
 pub(crate) fn req_semtokens_range(
+	core: &Core,
 	conn: &Connection,
+	ix_project: usize,
 	sfile: &SourceFile,
 	id: RequestId,
 	range: lsp_types::Range,
@@ -421,10 +436,15 @@ pub(crate) fn req_semtokens_range(
 	let resp = Response {
 		id,
 		result: Some(
-			serde_json::to_value(SemanticTokensRangeResult::Tokens(semtokens(
-				node,
-				&sfile.lndx,
-			)))
+			serde_json::to_value(SemanticTokensRangeResult::Tokens(SemanticTokens {
+				result_id: None,
+				data: highlight::Context {
+					core,
+					ix_project,
+					hl: Highlighter::new(&sfile.lndx),
+				}
+				.traverse(node),
+			}))
 			.unwrap(),
 		),
 		error: None,
@@ -432,111 +452,6 @@ pub(crate) fn req_semtokens_range(
 
 	conn.sender.send(Message::Response(resp))?;
 	Ok(())
-}
-
-#[must_use]
-pub(self) fn semtokens(node: SyntaxNode, lndx: &LineIndex) -> SemanticTokens {
-	let mut context = highlight::Context {
-		hl: Highlighter::new(lndx),
-	};
-
-	highlight::traverse(&mut context, node);
-
-	SemanticTokens {
-		result_id: None,
-		data: context.hl.tokens,
-	}
-}
-
-pub(crate) fn semantic_update(
-	strings: &StringInterner,
-	storage: &mut Storage,
-	delta: &mut SymbolDelta<SymbolKey>,
-	file_id: FileId,
-	green: GreenNode,
-) {
-	debug_assert_eq!(green.kind(), Syn::kind_to_raw(Syn::Root));
-	let cursor = SyntaxNode::new_root(green);
-
-	for removed in &delta.removed {
-		storage.data.remove(removed.1.into_inner());
-	}
-
-	for child in cursor.children() {
-		let Some(top) = ast::TopLevel::cast(child) else { continue; };
-
-		match top {
-			ast::TopLevel::ClassDef(classdef) => {
-				let Ok(class_name) = classdef.name() else { continue; };
-
-				let dat_k = storage.data.insert(Datum::Class(ClassDatum {
-					filepos: FilePos {
-						file: file_id,
-						pos: class_name.text_range().start(),
-					},
-				}));
-
-				let name = strings.type_name_nocase(class_name.text());
-				delta.added.push((name, SymbolKey::Class(dat_k)));
-			}
-			ast::TopLevel::ConstDef(constdef) => {
-				let Ok(const_name) = constdef.name() else { continue; };
-
-				let dat_k = storage.data.insert(Datum::Constant(ConstantDatum {
-					filepos: FilePos {
-						file: file_id,
-						pos: const_name.text_range().start(),
-					},
-				}));
-
-				let name = strings.var_name_nocase(const_name.text());
-				delta.added.push((name, SymbolKey::Constant(dat_k)));
-			}
-			ast::TopLevel::EnumDef(enumdef) => {
-				let Ok(enum_name) = enumdef.name() else { continue; };
-
-				let dat_k = storage.data.insert(Datum::Enum(EnumDatum {
-					filepos: FilePos {
-						file: file_id,
-						pos: enum_name.text_range().start(),
-					},
-				}));
-
-				let name = strings.type_name_nocase(enum_name.text());
-				delta.added.push((name, SymbolKey::Enum(dat_k)));
-			}
-			ast::TopLevel::MixinClassDef(mixindef) => {
-				let Ok(mixin_name) = mixindef.name() else { continue; };
-
-				let dat_k = storage.data.insert(Datum::MixinClass(MixinClassDatum {
-					filepos: FilePos {
-						file: file_id,
-						pos: mixin_name.text_range().start(),
-					},
-				}));
-
-				let name = strings.type_name_nocase(mixin_name.text());
-				delta.added.push((name, SymbolKey::MixinClass(dat_k)));
-			}
-			ast::TopLevel::StructDef(structdef) => {
-				let Ok(struct_name) = structdef.name() else { continue; };
-
-				let dat_k = storage.data.insert(Datum::Struct(StructDatum {
-					filepos: FilePos {
-						file: file_id,
-						pos: struct_name.text_range().start(),
-					},
-				}));
-
-				let name = strings.type_name_nocase(struct_name.text());
-				delta.added.push((name, SymbolKey::Struct(dat_k)));
-			}
-			ast::TopLevel::ClassExtend(_)
-			| ast::TopLevel::StructExtend(_)
-			| ast::TopLevel::Include(_)
-			| ast::TopLevel::Version(_) => continue,
-		}
-	}
 }
 
 // Notification handling ///////////////////////////////////////////////////////

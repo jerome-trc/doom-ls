@@ -944,6 +944,9 @@
 				],
 				"keyword.controlFlow": [
 					"keyword.control.zscript"
+				],
+				"*.member": [
+					"markup.underline"
 				]
 			}
 		}

@@ -280,7 +280,7 @@ impl Core {
 		}
 	}
 
-	pub(self) fn semantic_update(&mut self) {
+	fn semantic_update(&mut self) {
 		for project in &mut self.projects {
 			project.update_global_symbols(&self.strings);
 		}
@@ -385,6 +385,14 @@ impl Core {
 		self.projects
 			.iter_mut()
 			.find(|project| util::path_is_child_of(path, project.root()))
+	}
+
+	#[must_use]
+	fn project_index(&self, project: &Project) -> usize {
+		self.projects
+			.iter()
+			.position(|p| std::ptr::eq(p, project))
+			.unwrap()
 	}
 
 	fn respond_null(conn: &Connection, id: RequestId) -> UnitResult {
