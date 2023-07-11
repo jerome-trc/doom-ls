@@ -97,6 +97,7 @@ name = "doom-ls"
 version = "0.0.0"
 dependencies = [
  "bitflags 2.3.3",
+ "crossbeam-channel",
  "doomfront",
  "indexmap",
  "lsp-server",

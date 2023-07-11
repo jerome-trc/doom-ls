@@ -12,7 +12,7 @@ use doomfront::{
 	zdoom::zscript::{ast, SyntaxNode, SyntaxToken},
 	ParseError,
 };
-use lsp_server::{Connection, Message, RequestId, Response};
+use lsp_server::{Connection, ErrorCode, Message, RequestId, Response};
 use lsp_types::{
 	Diagnostic, DiagnosticSeverity, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
 	LanguageString, Location, MarkedString, Position, SemanticTokens, SemanticTokensRangeResult,
@@ -20,7 +20,6 @@ use lsp_types::{
 };
 use parking_lot::Mutex;
 use rayon::prelude::*;
-use tracing::warn;
 
 use crate::{
 	lines::{LineCol, LineIndex, TextDelta},
@@ -29,7 +28,7 @@ use crate::{
 	semtokens::Highlighter,
 	util,
 	zpath::ZPath,
-	Core, ErrorBox, LangId, MsgError, UnitResult,
+	Core, Error, ErrorBox, LangId, UnitResult,
 };
 
 pub(crate) use self::sema::*;
@@ -53,21 +52,17 @@ pub(crate) fn req_goto(
 	};
 
 	let Some(boffs) = sfile.lndx.offset(linecol) else {
-		Core::respond_null(conn, id)?;
-
-		return Err(
-			Box::new(MsgError(
-				format!("failed to get token at position {linecol:#?}")
-			))
-		);
+		return Err(Error::Process {
+			source: None,
+			ctx: format!("failed to find token at position {linecol:#?}")
+		}.map_to_response(id, ErrorCode::InvalidParams));
 	};
 
 	let Some(token) = cursor.token_at_offset(boffs).next() else {
-		Core::respond_null(conn, id)?;
-
-		return Err(Box::new(MsgError(
-			format!("failed to get token at position {linecol:#?}")
-		)));
+		return Err(Error::Process {
+			source: None,
+			ctx: format!("failed to find token at position {linecol:#?}")
+		}.map_to_response(id, ErrorCode::InvalidParams));
 	};
 
 	let handler = if token.kind() == Syn::Ident {
@@ -103,16 +98,20 @@ pub(crate) fn req_goto(
 		match handler(core, &core.projects[i], token.clone()) {
 			ControlFlow::Continue(()) => {}
 			ControlFlow::Break(Err(err)) => {
-				return Err(err);
+				return Err(Error::Process {
+					source: Some(err),
+					ctx: "go-to definition error".to_string(),
+				});
 			}
 			ControlFlow::Break(Ok(resp)) => {
-				conn.sender.send(Message::Response(Response {
-					id,
-					result: Some(serde_json::to_value(resp).unwrap()),
-					error: None,
-				}))?;
-
-				return Ok(());
+				return conn
+					.sender
+					.send(Message::Response(Response {
+						id,
+						result: Some(serde_json::to_value(resp).unwrap()),
+						error: None,
+					}))
+					.map_err(Error::from);
 			}
 		}
 	}
@@ -205,17 +204,10 @@ pub(crate) fn req_hover(
 	let pos = params.text_document_position_params.position;
 
 	let Some(token) = parsed.token_at::<Syn>(pos, &sfile.lndx) else {
-		warn!("Failed to find token specified by a hover request.");
-
-		conn.sender.send(Message::Response(
-			Response {
-				id,
-				result: None,
-				error: None, // TODO
-			}
-		))?;
-
-		return Ok(());
+		return Err(Error::Process {
+			source: None,
+			ctx: format!("invalid position {pos:#?}"),
+		}.map_to_response(id, ErrorCode::InvalidParams));
 	};
 
 	let contents = match token.kind() {
@@ -252,10 +244,13 @@ pub(crate) fn req_hover(
 
 	let resp = Response {
 		id,
-		result: Some(serde_json::to_value(Hover {
-			contents,
-			range: None,
-		})?),
+		result: Some(
+			serde_json::to_value(Hover {
+				contents,
+				range: None,
+			})
+			.unwrap(),
+		),
 		error: None,
 	};
 
@@ -280,21 +275,17 @@ pub(crate) fn req_references(
 	};
 
 	let Some(boffs) = sfile.lndx.offset(linecol) else {
-		Core::respond_null(conn, id)?;
-
-		return Err(
-			Box::new(MsgError(
-				format!("failed to get token at position {linecol:#?}")
-			))
-		);
+		return Err(Error::Process {
+			source: None,
+			ctx: format!("failed to find token at position {linecol:#?}")
+		}.map_to_response(id, ErrorCode::InvalidParams));
 	};
 
 	let Some(token) = cursor.token_at_offset(boffs).next() else {
-		Core::respond_null(conn, id)?;
-
-		return Err(Box::new(MsgError(
-			format!("failed to get token at position {linecol:#?}")
-		)));
+		return Err(Error::Process {
+			source: None,
+			ctx: format!("failed to find token at position {linecol:#?}")
+		}.map_to_response(id, ErrorCode::InvalidParams));
 	};
 
 	if token.kind() != Syn::Ident {
@@ -378,9 +369,10 @@ pub(crate) fn req_semtokens_full(
 
 	let resp = Response {
 		id,
-		result: Some(serde_json::to_value(SemanticTokensResult::Tokens(
-			semtokens(cursor, &sfile.lndx),
-		))?),
+		result: Some(
+			serde_json::to_value(SemanticTokensResult::Tokens(semtokens(cursor, &sfile.lndx)))
+				.unwrap(),
+		),
 		error: None,
 	};
 
@@ -408,11 +400,17 @@ pub(crate) fn req_semtokens_range(
 	};
 
 	let Some(start) = sfile.lndx.offset(lc_start) else {
-		return Err(Box::new(MsgError(format!("invalid range start: {lc_start:?}"))));
+		return Err(Error::Process {
+			source: None,
+			ctx: format!("invalid position {lc_start:#?}")
+		}.map_to_response(id, ErrorCode::InvalidParams));
 	};
 
 	let Some(end) = sfile.lndx.offset(lc_end) else {
-		return Err(Box::new(MsgError(format!("invalid range end: {lc_end:?}"))));
+		return Err(Error::Process {
+			source: None,
+			ctx: format!("invalid position {lc_end:#?}")
+		}.map_to_response(id, ErrorCode::InvalidParams));
 	};
 
 	let node = match cursor.covering_element(TextRange::new(start, end)) {
@@ -422,9 +420,13 @@ pub(crate) fn req_semtokens_range(
 
 	let resp = Response {
 		id,
-		result: Some(serde_json::to_value(SemanticTokensRangeResult::Tokens(
-			semtokens(node, &sfile.lndx),
-		))?),
+		result: Some(
+			serde_json::to_value(SemanticTokensRangeResult::Tokens(semtokens(
+				node,
+				&sfile.lndx,
+			)))
+			.unwrap(),
+		),
 		error: None,
 	};
 
@@ -747,14 +749,16 @@ pub(crate) fn partial_reparse(
 			col: delta.range.end.character,
 		};
 
-		let start = sfile
-			.lndx
-			.offset(start_lc)
-			.ok_or(MsgError("invalid range start".to_string()))?;
-		let end = sfile
-			.lndx
-			.offset(end_lc)
-			.ok_or(MsgError("invalid range end".to_string()))?;
+		let start = sfile.lndx.offset(start_lc).ok_or(Error::Process {
+			source: None,
+			ctx: format!("invalid position {start_lc:#?}"),
+		})?;
+		let end = sfile.lndx.offset(end_lc).ok_or({
+			Error::Process {
+				source: None,
+				ctx: format!("invalid position {end_lc:#?}"),
+			}
+		})?;
 
 		splice(
 			sfile,

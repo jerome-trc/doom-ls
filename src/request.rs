@@ -2,12 +2,14 @@
 
 use std::ops::ControlFlow;
 
-use lsp_server::{Connection, Request, RequestId};
+use lsp_server::{
+	Connection, ErrorCode, ExtractError, Request, RequestId, Response, ResponseError,
+};
 use lsp_types::request::{
 	GotoDefinition, HoverRequest, References, SemanticTokensFullRequest, SemanticTokensRangeRequest,
 };
 
-use crate::{util, zscript, Core, LangId, UnitResult};
+use crate::{util, zscript, Core, Error, LangId, UnitResult};
 
 pub(super) fn handle(
 	core: &mut Core,
@@ -27,9 +29,7 @@ pub(super) fn handle(
 		};
 
 		match sfile.lang {
-			LangId::ZScript => {
-				return zscript::req_semtokens_range(conn, sfile, id, params.range);
-			}
+			LangId::ZScript => zscript::req_semtokens_range(conn, sfile, id, params.range),
 			_ => Core::respond_null(conn, id),
 		}
 	})?;
@@ -47,9 +47,7 @@ pub(super) fn handle(
 		};
 
 		match sfile.lang {
-			LangId::ZScript => {
-				return zscript::req_hover(conn, sfile, id, params);
-			}
+			LangId::ZScript => zscript::req_hover(conn, sfile, id, params),
 			_ => Core::respond_null(conn, id),
 		}
 	})?;
@@ -67,9 +65,7 @@ pub(super) fn handle(
 		};
 
 		match sfile.lang {
-			LangId::ZScript => {
-				return zscript::req_semtokens_full(conn, sfile, id);
-			}
+			LangId::ZScript => zscript::req_semtokens_full(conn, sfile, id),
 			_ => Core::respond_null(conn, id),
 		}
 	})?;
@@ -142,8 +138,23 @@ where
 	R: lsp_types::request::Request,
 	F: FnOnce(RequestId, R::Params) -> UnitResult,
 {
+	let id = req.id.clone();
+
 	match req.extract::<R::Params>(R::METHOD) {
 		Ok((reqid, params)) => ControlFlow::Break(callback(reqid, params)),
-		Err(err) => Core::extract_error(err),
+		Err(err) => match err {
+			ExtractError::MethodMismatch(t) => ControlFlow::Continue(t),
+			ExtractError::JsonError { method: _, error } => {
+				ControlFlow::Break(Err(Error::Response(Response {
+					id,
+					result: None,
+					error: Some(ResponseError {
+						code: ErrorCode::InvalidParams as i32,
+						message: error.to_string(),
+						data: None,
+					}),
+				})))
+			}
+		},
 	}
 }

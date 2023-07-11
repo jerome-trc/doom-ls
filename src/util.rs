@@ -3,24 +3,39 @@ use std::path::{Path, PathBuf};
 use doomfront::rowan::{TextRange, TextSize};
 use lsp_types::{Location, Url};
 
-use crate::lines::LineIndex;
+use crate::{lines::LineIndex, Error};
 
-pub(crate) fn uri_to_pathbuf(uri: &Url) -> Result<PathBuf, PathError> {
+pub(crate) fn uri_to_pathbuf(uri: &Url) -> Result<PathBuf, Error> {
 	if uri.scheme() != "file" {
-		return Err(PathError::NonFileUri(uri.scheme().to_owned()));
+		return Err(Error::Process {
+			source: None,
+			ctx: format!("non-file URI provided: {uri}"),
+		});
 	}
 
 	let ret = match uri.to_file_path() {
 		Ok(pb) => pb,
-		Err(()) => return Err(PathError::NoHost),
+		Err(()) => {
+			return Err(Error::Process {
+				source: None,
+				ctx: format!("no host attached to file URI: {uri}"),
+			})
+		}
 	};
 
-	ret.canonicalize().map_err(PathError::Canonicalize)
+	ret.canonicalize().map_err(|err| Error::Process {
+		source: Some(Box::new(err)),
+		ctx: format!("failed to canonicalize file URI: {uri}"),
+	})
 }
 
-pub(crate) fn path_to_uri(path: impl AsRef<Path>) -> Result<Url, PathError> {
-	Url::parse(&format!("file://{}", path.as_ref().display()))
-		.map_err(|err| PathError::UriParse(Box::new(err)))
+pub(crate) fn path_to_uri(path: impl AsRef<Path>) -> Result<Url, Error> {
+	let path = path.as_ref();
+
+	Url::parse(&format!("file://{}", path.display())).map_err(|err| Error::Process {
+		source: Some(Box::new(err)),
+		ctx: format!("failed to parse a file URI from path: {}", path.display()),
+	})
 }
 
 pub(crate) fn make_location(
@@ -28,7 +43,7 @@ pub(crate) fn make_location(
 	path: &Path,
 	pos: TextSize,
 	token_len: usize,
-) -> Result<Location, PathError> {
+) -> Result<Location, Error> {
 	let uri = path_to_uri(path)?;
 	let start_lc = lndx.line_col(pos);
 	let end_lc = lndx.line_col(pos + TextSize::from(token_len as u32));
@@ -76,25 +91,4 @@ pub(crate) fn path_is_child_of(longer: &Path, shorter: &Path) -> bool {
 	}
 
 	true
-}
-
-#[derive(Debug)]
-pub(crate) enum PathError {
-	Canonicalize(std::io::Error),
-	NoHost,
-	NonFileUri(String),
-	UriParse(Box<dyn std::error::Error + Send + Sync>),
-}
-
-impl std::error::Error for PathError {}
-
-impl std::fmt::Display for PathError {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Self::Canonicalize(err) => write!(f, "failed to canonicalize a path: {err}"),
-			Self::NoHost => write!(f, "URI host is neither empty nor `localhost`"),
-			Self::NonFileUri(scheme) => write!(f, "expected scheme `file`, found: {scheme}"),
-			Self::UriParse(err) => write!(f, "failed to parse a `file` URI: {err}"),
-		}
-	}
 }

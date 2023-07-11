@@ -14,17 +14,23 @@ mod zpath;
 
 use std::{
 	collections::VecDeque,
+	fmt::Debug,
 	hash::BuildHasherDefault,
 	ops::ControlFlow,
 	path::{Path, PathBuf},
 };
 
+use crossbeam_channel::SendError;
 use indexmap::IndexSet;
-use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
+use lsp_server::{
+	Connection, ErrorCode, Message, Notification, ProtocolError, Request, RequestId, Response,
+	ResponseError,
+};
 use lsp_types::{
-	notification::ShowMessage, request::WorkspaceConfiguration, ConfigurationItem,
-	ConfigurationParams, HoverProviderCapability, InitializeParams, MessageType, OneOf,
-	SaveOptions, SemanticTokensFullOptions, SemanticTokensOptions,
+	notification::{Notification as NotificationTrait, ShowMessage},
+	request::{Request as RequestTrait, WorkspaceConfiguration},
+	ConfigurationItem, ConfigurationParams, HoverProviderCapability, InitializeParams, MessageType,
+	OneOf, SaveOptions, SemanticTokensFullOptions, SemanticTokensOptions,
 	SemanticTokensServerCapabilities, ServerCapabilities, ShowMessageParams,
 	TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
 	TextDocumentSyncSaveOptions, WorkDoneProgressOptions,
@@ -42,7 +48,7 @@ use tracing_subscriber::{
 
 pub(crate) use self::langs::*;
 
-fn main() -> UnitResult {
+fn main() -> Result<(), ErrorBox> {
 	let timer = Uptime::default();
 	eprintln!("Attempting log initialization.");
 	let layer_stdout = tracing_subscriber::fmt::Layer::default()
@@ -60,7 +66,7 @@ fn main() -> UnitResult {
 
 	core.comms.send(
 		&conn,
-		<WorkspaceConfiguration as lsp_types::request::Request>::METHOD,
+		WorkspaceConfiguration::METHOD,
 		ConfigurationParams {
 			items: vec![ConfigurationItem {
 				scope_uri: None,
@@ -73,8 +79,10 @@ fn main() -> UnitResult {
 			let configs = match serde_json::from_value::<CfgReqResult>(value) {
 				Ok(c) => c,
 				Err(err) => {
-					error!("Failed to decode user config: {err}");
-					return Err(Box::new(err));
+					return Err(Error::Process {
+						source: Some(Box::new(err)),
+						ctx: "failed to decode user config".to_string(),
+					});
 				}
 			};
 
@@ -159,7 +167,7 @@ impl Core {
 		for msg in conn.receiver.iter() {
 			match msg {
 				lsp_server::Message::Request(req) => {
-					if conn.handle_shutdown(&req)? {
+					if conn.handle_shutdown(&req).map_err(Error::from)? {
 						info!("Server shutting down...");
 						return Ok(());
 					}
@@ -204,16 +212,33 @@ impl Core {
 
 	fn process_request(&mut self, conn: &Connection, req: Request) {
 		match request::handle(self, conn, req) {
-			ControlFlow::Break(Err(err)) => {
-				error!("{err}");
+			ControlFlow::Break(Err(error)) => {
+				match error {
+					Error::Channel(err) => {
+						// Don't bother trying to send an error response if we
+						// have reason to believe the channel is compromised.
+						error!("{err}");
+					}
+					Error::Response(resp) => {
+						{
+							let e = resp.error.as_ref().unwrap();
+							error!("{e:#?}");
+						}
+
+						let send_res = conn.sender.send(Message::Response(resp));
+
+						if let Err(e) = send_res {
+							error!("Failed to send error message: {e}");
+						}
+					}
+					Error::Process { .. } => unreachable!(),
+				}
 			}
 			ControlFlow::Continue(_) | ControlFlow::Break(_) => {}
 		}
 	}
 
 	fn backlog_request(&mut self, req: Request) {
-		use lsp_types::request::Request as RequestTrait;
-
 		if req.method.as_str() == lsp_types::request::SemanticTokensFullRequest::METHOD {
 			self.comms.backlog_reqs.push_back(req);
 		}
@@ -221,28 +246,37 @@ impl Core {
 
 	fn process_notif(&mut self, conn: &Connection, notif: Notification) {
 		match notif::handle(self, conn, notif) {
-			ControlFlow::Break(Err(err)) => {
-				error!("{err}");
+			ControlFlow::Break(Err(error)) => {
+				match error {
+					Error::Channel(err) => {
+						// Don't bother trying to send an error response if we
+						// have reason to believe the channel is compromised.
+						error!("{err}");
+					}
+					err @ Error::Process { .. } => {
+						let send_res = conn.sender.send(Message::Notification(Notification {
+							method: ShowMessage::METHOD.to_string(),
+							params: serde_json::to_value(ShowMessageParams {
+								typ: MessageType::ERROR,
+								message: err.to_string(),
+							})
+							.unwrap(),
+						}));
+
+						if let Err(e) = send_res {
+							error!("Failed to send error message: {e}");
+						}
+					}
+					Error::Response(_) => unreachable!(),
+				}
 			}
 			ControlFlow::Continue(_) | ControlFlow::Break(_) => {}
 		}
 	}
 
 	fn backlog_notif(&mut self, notif: Notification) {
-		use lsp_types::notification::Notification as NotificationTrait;
-
 		if notif.method.as_str() == lsp_types::notification::DidOpenTextDocument::METHOD {
 			self.comms.backlog_notifs.push_back(notif);
-		}
-	}
-
-	#[must_use]
-	fn extract_error<T>(err: ExtractError<T>) -> ControlFlow<UnitResult, T> {
-		match err {
-			ExtractError::MethodMismatch(t) => ControlFlow::Continue(t),
-			ExtractError::JsonError { method: _, error } => {
-				ControlFlow::Break(Err(Box::new(error)))
-			}
 		}
 	}
 
@@ -354,26 +388,26 @@ impl Core {
 	}
 
 	fn respond_null(conn: &Connection, id: RequestId) -> UnitResult {
-		conn.sender.send(Message::Response(Response {
-			id,
-			result: Some(serde_json::Value::Null),
-			error: None,
-		}))?;
-
-		Ok(())
+		conn.sender
+			.send(Message::Response(Response {
+				id,
+				result: Some(serde_json::Value::Null),
+				error: None,
+			}))
+			.map_err(Error::from)
 	}
 
 	fn info_message(conn: &Connection, text: &'static str) -> UnitResult {
-		conn.sender.send(Message::Notification(Notification {
-			method: <ShowMessage as lsp_types::notification::Notification>::METHOD.to_string(),
-			params: serde_json::to_value(ShowMessageParams {
-				typ: MessageType::INFO,
-				message: text.to_string(),
-			})
-			.unwrap(),
-		}))?;
-
-		Ok(())
+		conn.sender
+			.send(Message::Notification(Notification {
+				method: ShowMessage::METHOD.to_string(),
+				params: serde_json::to_value(ShowMessageParams {
+					typ: MessageType::INFO,
+					message: text.to_string(),
+				})
+				.unwrap(),
+			}))
+			.map_err(Error::from)
 	}
 }
 
@@ -396,11 +430,13 @@ impl CommSystem {
 		let id = RequestId::from(self.next_id);
 		self.next_id = self.next_id.checked_add(1).unwrap_or(0);
 
-		conn.sender.send(Message::Request(Request {
-			id: id.clone(),
-			method: method.to_string(),
-			params: serde_json::to_value(params)?,
-		}))?;
+		conn.sender
+			.send(Message::Request(Request {
+				id: id.clone(),
+				method: method.to_string(),
+				params: serde_json::to_value(params).unwrap(),
+			}))
+			.map_err(Error::from)?;
 
 		let _ = self.egress.insert(id, callback);
 
@@ -416,18 +452,85 @@ impl CommSystem {
 // Types ///////////////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
-pub(crate) struct MsgError(String);
+pub(crate) enum Error {
+	/// Failures to send messages over the LSP connection are given a separate
+	/// variant to tell top-level code not to use the channel to report the error.
+	Channel(SendError<Message>),
+	Response(Response),
+	Process {
+		source: Option<ErrorBox>,
+		ctx: String,
+	},
+}
 
-impl std::error::Error for MsgError {}
+impl Error {
+	#[must_use]
+	pub(crate) fn map_to_response(self, req_id: RequestId, code: ErrorCode) -> Self {
+		if matches!(self, Self::Response(_)) {
+			return self;
+		}
 
-impl std::fmt::Display for MsgError {
+		let message = self.to_string();
+
+		Self::Response(Response {
+			id: req_id,
+			result: None,
+			error: Some(ResponseError {
+				code: code as i32,
+				message,
+				data: None,
+			}),
+		})
+	}
+}
+
+impl std::error::Error for Error {}
+
+impl std::fmt::Display for Error {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "{}", self.0)
+		match self {
+			Self::Channel(err) => write!(f, "failed to send a message: {err}"),
+			Self::Process { source, ctx } => match source {
+				Some(s) => {
+					write!(f, "{ctx}: {s}")
+				}
+				None => {
+					write!(f, "{ctx}")
+				}
+			},
+			Self::Response(resp) => {
+				write!(f, "failed to respond to a request: {resp:#?}")
+			}
+		}
+	}
+}
+
+impl From<SendError<Message>> for Error {
+	fn from(value: SendError<Message>) -> Self {
+		Self::Channel(value)
+	}
+}
+
+impl From<ProtocolError> for Error {
+	fn from(value: ProtocolError) -> Self {
+		Self::Process {
+			source: Some(Box::new(value)),
+			ctx: "Language Server Protocol error".to_string(),
+		}
+	}
+}
+
+impl From<std::io::Error> for Error {
+	fn from(value: std::io::Error) -> Self {
+		Self::Process {
+			source: Some(Box::new(value)),
+			ctx: "file I/O failure".to_string(),
+		}
 	}
 }
 
 pub(crate) type ErrorBox = Box<dyn std::error::Error + Send + Sync>;
-pub(crate) type UnitResult = Result<(), ErrorBox>;
+pub(crate) type UnitResult = Result<(), Error>;
 pub(crate) type FxIndexSet<T> = IndexSet<T, BuildHasherDefault<FxHasher>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

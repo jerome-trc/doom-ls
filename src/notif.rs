@@ -2,7 +2,7 @@
 
 use std::ops::ControlFlow;
 
-use lsp_server::{Connection, Message, Notification};
+use lsp_server::{Connection, ExtractError, Message, Notification};
 use lsp_types::{
 	notification::{
 		DidChangeConfiguration, DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument,
@@ -15,7 +15,7 @@ use tracing::debug;
 use crate::{
 	lines::{self, LineIndex},
 	project::SourceFile,
-	util, zscript, Core, LangId, UnitResult,
+	util, zscript, Core, Error, LangId, UnitResult,
 };
 
 pub(super) fn handle(
@@ -246,6 +246,14 @@ where
 {
 	match notif.extract::<N::Params>(N::METHOD) {
 		Ok(params) => ControlFlow::Break(callback(params)),
-		Err(err) => Core::extract_error(err),
+		Err(err) => match err {
+			ExtractError::MethodMismatch(t) => ControlFlow::Continue(t),
+			ExtractError::JsonError { method: _, error } => {
+				ControlFlow::Break(Err(Error::Process {
+					ctx: format!("`{}` notification", N::METHOD),
+					source: Some(Box::new(error)),
+				}))
+			}
+		},
 	}
 }
