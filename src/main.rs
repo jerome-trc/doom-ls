@@ -76,34 +76,7 @@ fn main() -> Result<(), ErrorBox> {
 				section: Some("doomls".to_string()),
 			}],
 		},
-		|core, conn, resp| {
-			let Some(value) = resp.result else { return Ok(()); };
-
-			let configs = match serde_json::from_value::<CfgReqResult>(value) {
-				Ok(c) => c,
-				Err(err) => {
-					return Err(Error::Process {
-						source: Some(Box::new(err)),
-						ctx: "failed to decode user config".to_string(),
-					});
-				}
-			};
-
-			let string_array = configs.iter().find_map(|value| {
-				let Some(obj) = value.as_object() else { return None; };
-				let Some(v) = obj.get("loadOrder") else { return None; };
-				v.as_array()
-			});
-
-			let Some(string_array) = string_array else {
-				Core::info_message(conn, "No load order is configured; DoomLS functionality will be minimal.")?;
-				return Ok(());
-			};
-
-			core.build_project_list(string_array);
-			core.init = true;
-			Ok(())
-		},
+		Core::initial_config_received,
 	)?;
 
 	core.main_loop(conn)?;
@@ -296,79 +269,6 @@ impl Core {
 		);
 	}
 
-	fn build_project_list(&mut self, values: &[serde_json::Value]) {
-		let load_order = values
-			.iter()
-			.filter_map(|lo_val| match lo_val.as_str() {
-				Some(s) => Some(PathBuf::from(s)),
-				None => {
-					error!("Non-string load order item given: {lo_val:#?}");
-					None
-				}
-			})
-			.collect::<Vec<_>>();
-
-		debug!("Rebuilding project list...");
-
-		self.projects.clear();
-
-		for path in load_order {
-			debug!("Registering project: {}", path.display());
-			let mut project = Project::new(path);
-
-			// We have to intern all relevant paths here since (G)ZDoom `#include`
-			// directives work case-insensitively on the ZDoom VFS. We have no
-			// reason to believe that any given include path can just be joined
-			// to the project root to get a valid OS path.
-
-			let walker = walkdir::WalkDir::new(project.root())
-				.follow_links(false)
-				.max_depth(16)
-				.same_file_system(true)
-				.into_iter()
-				.filter_map(|result| match result {
-					Ok(d_e) => Some(d_e),
-					Err(err) => {
-						error!("Failed to inspect a project file: {err}");
-						None
-					}
-				});
-
-			for d_ent in walker {
-				let path = d_ent.path();
-
-				if path.is_dir() {
-					continue;
-				}
-
-				// It's normal for Doom engine mods to come with all manner of
-				// non-text resources like graphics and sounds.
-				// There may also be compiled ACS blobs (`*.o`).
-				// We have no reason to intern paths to these.
-
-				const BIN_EXTS: &[&str] = &[
-					"blend", "bmp", "dat", "flac", "iqm", "jpg", "jpeg", "lmp", "mid", "md3",
-					"mp3", "ogg", "o", "pcx", "png", "tga", "wad", "wav", "xcf", "xm",
-				];
-
-				if path
-					.extension()
-					.is_some_and(|ext| BIN_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
-				{
-					continue;
-				}
-
-				project.intern_path(path);
-			}
-
-			if project.root().is_dir() {
-				project.build_include_trees();
-			}
-
-			self.projects.push(project);
-		}
-	}
-
 	#[must_use]
 	fn find_project_by_path(&self, path: &Path) -> Option<(&Project, FileId)> {
 		self.projects
@@ -464,6 +364,110 @@ impl Core {
 				.unwrap(),
 			}))
 			.map_err(Error::from)
+	}
+
+	// Setup ///////////////////////////////////////////////////////////////////
+
+	fn build_project_list(&mut self, values: &[serde_json::Value]) {
+		let load_order = values
+			.iter()
+			.filter_map(|lo_val| match lo_val.as_str() {
+				Some(s) => Some(PathBuf::from(s)),
+				None => {
+					error!("Non-string load order item given: {lo_val:#?}");
+					None
+				}
+			})
+			.collect::<Vec<_>>();
+
+		debug!("Rebuilding project list...");
+
+		self.projects.clear();
+
+		for path in load_order {
+			debug!("Registering project: {}", path.display());
+			let mut project = Project::new(path);
+
+			// We have to intern all relevant paths here since (G)ZDoom `#include`
+			// directives work case-insensitively on the ZDoom VFS. We have no
+			// reason to believe that any given include path can just be joined
+			// to the project root to get a valid OS path.
+
+			let walker = walkdir::WalkDir::new(project.root())
+				.follow_links(false)
+				.max_depth(16)
+				.same_file_system(true)
+				.into_iter()
+				.filter_map(|result| match result {
+					Ok(d_e) => Some(d_e),
+					Err(err) => {
+						error!("Failed to inspect a project file: {err}");
+						None
+					}
+				});
+
+			for d_ent in walker {
+				let path = d_ent.path();
+
+				if path.is_dir() {
+					continue;
+				}
+
+				// It's normal for Doom engine mods to come with all manner of
+				// non-text resources like graphics and sounds.
+				// There may also be compiled ACS blobs (`*.o`).
+				// We have no reason to intern paths to these.
+
+				const BIN_EXTS: &[&str] = &[
+					"blend", "bmp", "dat", "flac", "iqm", "jpg", "jpeg", "lmp", "mid", "md3",
+					"mp3", "ogg", "o", "pcx", "png", "tga", "wad", "wav", "xcf", "xm",
+				];
+
+				if path
+					.extension()
+					.is_some_and(|ext| BIN_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
+				{
+					continue;
+				}
+
+				project.intern_path(path);
+			}
+
+			if project.root().is_dir() {
+				project.build_include_trees();
+			}
+
+			self.projects.push(project);
+		}
+	}
+
+	fn initial_config_received(&mut self, conn: &Connection, resp: Response) -> UnitResult {
+		let Some(value) = resp.result else { return Ok(()); };
+
+		let configs = match serde_json::from_value::<CfgReqResult>(value) {
+			Ok(c) => c,
+			Err(err) => {
+				return Err(Error::Process {
+					source: Some(Box::new(err)),
+					ctx: "failed to decode user config".to_string(),
+				});
+			}
+		};
+
+		let string_array = configs.iter().find_map(|value| {
+			let Some(obj) = value.as_object() else { return None; };
+			let Some(v) = obj.get("loadOrder") else { return None; };
+			v.as_array()
+		});
+
+		let Some(string_array) = string_array else {
+			Core::info_message(conn, "No load order is configured; DoomLS functionality will be minimal.")?;
+			return Ok(());
+		};
+
+		self.build_project_list(string_array);
+		self.init = true;
+		Ok(())
 	}
 }
 
