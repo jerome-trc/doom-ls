@@ -11,7 +11,7 @@ use tracing::error;
 
 use crate::{
 	lines::{LineCol, LineIndex},
-	names::{Name, StringInterner},
+	names::{IName, StringInterner},
 	zpath::{ZPath, ZPathBuf},
 	zscript, FxIndexSet, LangId,
 };
@@ -25,7 +25,7 @@ pub(crate) struct Project {
 	/// notification comes in. It is left until the next time the client makes
 	/// a request, at which point that file's symbols are invalidated.
 	dirty: FxHashSet<FileId>,
-	symbols: FxHashMap<Name, SymbolKey>,
+	symbols: Scope,
 	// Languages ///////////////////////////////////////////////////////////////
 	zscript: zscript::Storage,
 }
@@ -38,7 +38,7 @@ impl Project {
 			paths: PathInterner::default(),
 			files: FxHashMap::default(),
 			dirty: FxHashSet::default(),
-			symbols: FxHashMap::default(),
+			symbols: Scope::default(),
 			zscript: zscript::Storage::default(),
 		}
 	}
@@ -116,8 +116,8 @@ impl Project {
 	}
 
 	#[must_use]
-	pub(crate) fn lookup_global(&self, qname: &Name) -> Option<SymbolKey> {
-		self.symbols.get(qname).copied()
+	pub(crate) fn lookup_global(&self, qname: &IName) -> Option<&Datum> {
+		self.symbols.get(qname)
 	}
 
 	pub(crate) fn all_files(&self) -> impl Iterator<Item = (FileId, &SourceFile)> {
@@ -129,21 +129,6 @@ impl Project {
 		self.all_files().par_bridge()
 	}
 
-	#[must_use]
-	pub(crate) fn backwards_lookup(
-		projects: &[Self],
-		from: usize,
-		name: Name,
-	) -> Option<(&Project, SymbolKey)> {
-		for project in &mut projects[..=from].iter().rev() {
-			if let Some(sym_k) = project.symbols.get(&name) {
-				return Some((project, *sym_k));
-			}
-		}
-
-		None
-	}
-
 	pub(crate) fn set_dirty(&mut self, file_id: FileId) {
 		self.dirty.insert(file_id);
 	}
@@ -152,46 +137,63 @@ impl Project {
 		let all_dirty = self.dirty.drain().collect::<Vec<_>>();
 
 		for file_id in all_dirty {
+			let symbols = std::ptr::addr_of_mut!(self.symbols);
 			let sfile = self.get_file_mut(file_id).unwrap();
 			let Some(parsed) = sfile.parsed.as_mut() else { continue; };
 
-			let green = parsed.green.clone();
-
-			match sfile.lang {
-				LangId::Unknown => continue,
-				LangId::ZScript => {
-					let mut delta = SymbolDelta::default();
-
-					for removed in parsed.symbols.drain(..) {
-						let SymbolKey::ZScript(sym_k) = removed.1;
-						delta.removed.push((removed.0, sym_k));
-					}
-
-					zscript::sema::update(
-						zscript::sema::UpdateContext {
-							strings,
-							storage: &mut self.zscript,
-							delta: &mut delta,
-							file_id,
-						},
-						green,
-					);
-
-					for removed in delta.removed {
-						self.symbols.remove(&removed.0);
-					}
-
-					for added in delta.added {
-						self.symbols.insert(added.0, SymbolKey::ZScript(added.1));
-					}
+			for r in parsed.symbols.drain(..) {
+				unsafe {
+					(*symbols).remove(&r);
 				}
+			}
+
+			let green = parsed.green.clone();
+			let lang = sfile.lang;
+
+			let contributed = match lang {
+				LangId::ZScript => {
+					let mut ctx = zscript::sema::UpdateContext {
+						strings,
+						project: self,
+						file_id,
+						contributed: vec![],
+					};
+
+					ctx.update(green);
+
+					ctx.contributed
+				}
+				LangId::Unknown => continue,
 			};
+
+			let sfile = self.get_file_mut(file_id).unwrap();
+			let Some(parsed) = sfile.parsed.as_mut() else { continue; };
+
+			for iname in contributed {
+				parsed.symbols.push(iname);
+			}
 		}
+	}
+
+	#[must_use]
+	#[allow(unused)]
+	pub(crate) fn globals(&self) -> &Scope {
+		&self.symbols
+	}
+
+	#[must_use]
+	pub(crate) fn globals_mut(&mut self) -> &mut Scope {
+		&mut self.symbols
 	}
 
 	#[must_use]
 	pub(crate) fn zscript(&self) -> &zscript::Storage {
 		&self.zscript
+	}
+
+	#[must_use]
+	pub(crate) fn zscript_mut(&mut self) -> &mut zscript::Storage {
+		&mut self.zscript
 	}
 
 	pub(crate) fn on_file_delete(&mut self, path: PathBuf) {
@@ -267,7 +269,7 @@ pub(crate) struct ParsedFile {
 	/// resolution table. This is used to provide a "symbol delta" for whenever
 	/// this file is changed, so that the entire global map does not have to be
 	/// recomputed.
-	pub(crate) symbols: Vec<(Name, SymbolKey)>,
+	pub(crate) symbols: Vec<IName>,
 	pub(crate) errors: ParseErrors,
 }
 
@@ -309,23 +311,44 @@ pub(crate) struct FilePos {
 	pub(crate) pos: TextSize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum SymbolKey {
-	ZScript(zscript::SymbolKey),
+#[derive(Debug)]
+pub(crate) enum Datum {
+	ZScript(zscript::Datum),
+}
+
+pub(crate) type ScopeStack<'s> = Vec<StackedScope<'s>>;
+
+#[derive(Debug, Default)]
+pub(crate) struct Scope {
+	pub(crate) names: FxHashMap<IName, Datum>,
+	pub(crate) addenda: Vec<IName>,
+}
+
+impl std::ops::Deref for Scope {
+	type Target = FxHashMap<IName, Datum>;
+
+	fn deref(&self) -> &Self::Target {
+		&self.names
+	}
+}
+
+impl std::ops::DerefMut for Scope {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		&mut self.names
+	}
 }
 
 #[derive(Debug)]
-pub(crate) struct SymbolDelta<K: Eq + Copy> {
-	pub(crate) removed: Vec<(Name, K)>,
-	pub(crate) added: Vec<(Name, K)>,
+pub(crate) struct StackedScope<'s> {
+	pub(crate) inner: &'s Scope,
+	pub(crate) is_addendum: bool,
 }
 
-impl<K: Eq + Copy> Default for SymbolDelta<K> {
-	fn default() -> Self {
-		Self {
-			removed: vec![],
-			added: vec![],
-		}
+impl std::ops::Deref for StackedScope<'_> {
+	type Target = Scope;
+
+	fn deref(&self) -> &Self::Target {
+		self.inner
 	}
 }
 

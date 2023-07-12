@@ -9,7 +9,20 @@ use lsp_types::request::{
 	GotoDefinition, HoverRequest, References, SemanticTokensFullRequest, SemanticTokensRangeRequest,
 };
 
-use crate::{util, zscript, Core, Error, LangId, UnitResult};
+use crate::{
+	project::{FileId, Project, SourceFile},
+	util, zscript, Core, Error, LangId, UnitResult,
+};
+
+pub(super) struct Context<'c> {
+	pub(super) core: &'c Core,
+	pub(super) conn: &'c Connection,
+	pub(super) project: &'c Project,
+	pub(super) ix_project: usize,
+	pub(super) file_id: FileId,
+	pub(super) sfile: &'c SourceFile,
+	pub(super) id: RequestId,
+}
 
 pub(super) fn handle(
 	core: &mut Core,
@@ -30,11 +43,19 @@ pub(super) fn handle(
 
 		let ix_project = core.project_index(project);
 
+		let ctx = Context {
+			core,
+			conn,
+			project,
+			ix_project,
+			file_id,
+			sfile,
+			id,
+		};
+
 		match sfile.lang {
-			LangId::ZScript => {
-				zscript::req_semtokens_range(core, conn, ix_project, sfile, id, params.range)
-			}
-			_ => Core::respond_null(conn, id),
+			LangId::ZScript => zscript::req_semtokens_range(ctx, params.range),
+			_ => Core::respond_null(conn, ctx.id),
 		}
 	})?;
 
@@ -50,9 +71,21 @@ pub(super) fn handle(
 			return Core::respond_null(conn, id);
 		};
 
+		let ix_project = core.project_index(project);
+
+		let ctx = Context {
+			core,
+			conn,
+			project,
+			ix_project,
+			file_id,
+			sfile,
+			id,
+		};
+
 		match sfile.lang {
-			LangId::ZScript => zscript::req_hover(conn, sfile, id, params),
-			_ => Core::respond_null(conn, id),
+			LangId::ZScript => zscript::req_hover(ctx, params),
+			_ => Core::respond_null(conn, ctx.id),
 		}
 	})?;
 
@@ -70,9 +103,19 @@ pub(super) fn handle(
 
 		let ix_project = core.project_index(project);
 
+		let ctx = Context {
+			core,
+			conn,
+			project,
+			ix_project,
+			file_id,
+			id,
+			sfile,
+		};
+
 		match sfile.lang {
-			LangId::ZScript => zscript::req_semtokens_full(core, conn, ix_project, sfile, id),
-			_ => Core::respond_null(conn, id),
+			LangId::ZScript => zscript::req_semtokens_full(ctx),
+			_ => Core::respond_null(conn, ctx.id),
 		}
 	})?;
 
@@ -97,14 +140,17 @@ pub(super) fn handle(
 			return Core::respond_null(conn, id);
 		};
 
-		zscript::req_goto(
+		let ctx = Context {
 			core,
 			conn,
+			project,
+			ix_project: ix_p,
+			file_id,
 			sfile,
 			id,
-			params.text_document_position_params.position,
-			ix_p,
-		)
+		};
+
+		zscript::req_goto(ctx, params.text_document_position_params.position)
 	})?;
 
 	req = try_request::<References, _>(req, |id, params| {

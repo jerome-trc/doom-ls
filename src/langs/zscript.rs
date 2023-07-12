@@ -28,8 +28,7 @@ use rayon::prelude::*;
 use crate::{
 	lines::{LineCol, LineIndex, TextDelta},
 	project::{self, ParseErrors, ParsedFile, Project, SourceFile},
-	semtokens::Highlighter,
-	util,
+	request, util,
 	zpath::ZPath,
 	Core, Error, ErrorBox, LangId, UnitResult,
 };
@@ -38,15 +37,8 @@ pub(crate) use self::sema::*;
 
 // Request handling ////////////////////////////////////////////////////////////
 
-pub(crate) fn req_goto(
-	core: &Core,
-	conn: &Connection,
-	sfile: &SourceFile,
-	id: RequestId,
-	position: Position,
-	ix_project: usize,
-) -> UnitResult {
-	let parsed = sfile.parsed.as_ref().unwrap();
+pub(crate) fn req_goto(ctx: request::Context, position: Position) -> UnitResult {
+	let parsed = ctx.sfile.parsed.as_ref().unwrap();
 	let cursor = SyntaxNode::new_root(parsed.green.clone());
 
 	let linecol = LineCol {
@@ -54,18 +46,18 @@ pub(crate) fn req_goto(
 		col: position.character,
 	};
 
-	let Some(boffs) = sfile.lndx.offset(linecol) else {
+	let Some(boffs) = ctx.sfile.lndx.offset(linecol) else {
 		return Err(Error::Process {
 			source: None,
 			ctx: format!("failed to find token at position {linecol:#?}")
-		}.map_to_response(id, ErrorCode::InvalidParams));
+		}.map_to_response(ctx.id, ErrorCode::InvalidParams));
 	};
 
 	let Some(token) = cursor.token_at_offset(boffs).next() else {
 		return Err(Error::Process {
 			source: None,
 			ctx: format!("failed to find token at position {linecol:#?}")
-		}.map_to_response(id, ErrorCode::InvalidParams));
+		}.map_to_response(ctx.id, ErrorCode::InvalidParams));
 	};
 
 	let handler = if token.kind() == Syn::Ident {
@@ -73,7 +65,7 @@ pub(crate) fn req_goto(
 
 		if token.text().eq_ignore_ascii_case("self") && ast::IdentExpr::can_cast(parent.kind()) {
 			// No useful information to provide here.
-			Core::respond_null(conn, id)?;
+			Core::respond_null(ctx.conn, ctx.id)?;
 			tracing::debug!("GotoDefinition miss - `self` identifier.");
 			return Ok(());
 		}
@@ -89,7 +81,7 @@ pub(crate) fn req_goto(
 	// - `Syn::KwString` / `Syn::KwArray` / `Syn::KwMap` / `Syn::KwMapIterator` /
 	// `Syn::KwColor` / `Syn::KwVector2` / `Syn::KwVector3` by faking their definitions.
 	} else {
-		Core::respond_null(conn, id)?;
+		Core::respond_null(ctx.conn, ctx.id)?;
 		tracing::debug!("GotoDefinition miss - unsupported token.");
 		return Ok(());
 	};
@@ -97,8 +89,8 @@ pub(crate) fn req_goto(
 	// TODO: If the user put in a "go to definition" request on the identifier
 	// making up the declaration, respond with a list of references.
 
-	for i in (0..=ix_project).rev() {
-		match handler(core, &core.projects[i], token.clone()) {
+	for project in ctx.core.projects_backwards_from(ctx.ix_project) {
+		match handler(ctx.core, project, token.clone()) {
 			ControlFlow::Continue(()) => {}
 			ControlFlow::Break(Err(err)) => {
 				return Err(Error::Process {
@@ -107,10 +99,11 @@ pub(crate) fn req_goto(
 				});
 			}
 			ControlFlow::Break(Ok(resp)) => {
-				return conn
+				return ctx
+					.conn
 					.sender
 					.send(Message::Response(Response {
-						id,
+						id: ctx.id,
 						result: Some(serde_json::to_value(resp).unwrap()),
 						error: None,
 					}))
@@ -120,7 +113,7 @@ pub(crate) fn req_goto(
 	}
 
 	tracing::debug!("GotoDefinition miss - unknown symbol.");
-	Core::respond_null(conn, id)
+	Core::respond_null(ctx.conn, ctx.id)
 }
 
 /// Returns:
@@ -135,16 +128,12 @@ fn req_goto_ident(
 
 	// TODO: Rather than trying every namespace, narrow down based on context.
 
-	if let Some(project::SymbolKey::ZScript(sym_k)) =
-		project.lookup_global(&core.strings.type_name_nocase(text))
-	{
-		return goto_symbol(project, sym_k, text);
+	if let Some(datum) = project.lookup_global(&core.strings.type_name_nocase(text)) {
+		return goto_symbol(project, datum, text);
 	}
 
-	if let Some(project::SymbolKey::ZScript(sym_k)) =
-		project.lookup_global(&core.strings.var_name_nocase(text))
-	{
-		return goto_symbol(project, sym_k, text);
+	if let Some(datum) = project.lookup_global(&core.strings.var_name_nocase(text)) {
+		return goto_symbol(project, datum, text);
 	}
 
 	ControlFlow::Continue(())
@@ -152,36 +141,16 @@ fn req_goto_ident(
 
 fn goto_symbol(
 	project: &Project,
-	sym_k: SymbolKey,
+	datum: &project::Datum,
 	name: &str,
 ) -> ControlFlow<Result<GotoDefinitionResponse, ErrorBox>> {
-	let storage = project.zscript();
-
-	let filepos = match sym_k {
-		SymbolKey::Class(class_k) => {
-			let datum = &storage.data[class_k];
-			let Datum::Class(class_d) = datum else { unreachable!() };
-			class_d.filepos
-		}
-		SymbolKey::Constant(const_k) => {
-			let datum = &storage.data[const_k];
-			let Datum::Constant(const_d) = datum else { unreachable!() };
-			const_d.filepos
-		}
-		SymbolKey::Enum(enum_k) => {
-			let datum = &storage.data[enum_k];
-			let Datum::Enum(enum_d) = datum else { unreachable!() };
-			enum_d.filepos
-		}
-		SymbolKey::MixinClass(mixin_k) => {
-			let datum = &storage.data[mixin_k];
-			let Datum::MixinClass(mixin_d) = datum else { unreachable!() };
-			mixin_d.filepos
-		}
-		SymbolKey::Struct(struct_k) => {
-			let datum = &storage.data[struct_k];
-			let Datum::Struct(struct_d) = datum else { unreachable!() };
-			struct_d.filepos
+	let filepos = match datum {
+		project::Datum::ZScript(dat_zs) => {
+			if let Some(n) = dat_zs.name_filepos() {
+				n
+			} else {
+				return ControlFlow::Break(Ok(GotoDefinitionResponse::Array(vec![])));
+			}
 		}
 	};
 
@@ -194,23 +163,18 @@ fn goto_symbol(
 	}
 }
 
-pub(crate) fn req_hover(
-	conn: &Connection,
-	sfile: &SourceFile,
-	id: RequestId,
-	params: HoverParams,
-) -> UnitResult {
-	let Some(parsed) = &sfile.parsed else {
-		return Core::respond_null(conn, id);
+pub(crate) fn req_hover(ctx: request::Context, params: HoverParams) -> UnitResult {
+	let Some(parsed) = &ctx.sfile.parsed else {
+		return Core::respond_null(ctx.conn, ctx.id);
 	};
 
 	let pos = params.text_document_position_params.position;
 
-	let Some(token) = parsed.token_at::<Syn>(pos, &sfile.lndx) else {
+	let Some(token) = parsed.token_at::<Syn>(pos, &ctx.sfile.lndx) else {
 		return Err(Error::Process {
 			source: None,
 			ctx: format!("invalid position {pos:#?}"),
-		}.map_to_response(id, ErrorCode::InvalidParams));
+		}.map_to_response(ctx.id, ErrorCode::InvalidParams));
 	};
 
 	let contents = match token.kind() {
@@ -233,9 +197,9 @@ pub(crate) fn req_hover(
 				])
 		}
 		_ => {
-			conn.sender.send(Message::Response(
+			ctx.conn.sender.send(Message::Response(
 				Response {
-					id,
+					id: ctx.id,
 					result: Some(serde_json::Value::Null),
 					error: None,
 				}
@@ -246,7 +210,7 @@ pub(crate) fn req_hover(
 	};
 
 	let resp = Response {
-		id,
+		id: ctx.id,
 		result: Some(
 			serde_json::to_value(Hover {
 				contents,
@@ -257,7 +221,7 @@ pub(crate) fn req_hover(
 		error: None,
 	};
 
-	conn.sender.send(Message::Response(resp))?;
+	ctx.conn.sender.send(Message::Response(resp))?;
 	Ok(())
 }
 
@@ -362,46 +326,29 @@ fn references_to(sfile: &SourceFile, path: &Path, ident: &str) -> Vec<Location> 
 	ret
 }
 
-pub(crate) fn req_semtokens_full(
-	core: &Core,
-	conn: &Connection,
-	ix_project: usize,
-	sfile: &SourceFile,
-	id: RequestId,
-) -> UnitResult {
-	let Some(parsed) = &sfile.parsed else { unreachable!() };
+pub(crate) fn req_semtokens_full(ctx: request::Context) -> UnitResult {
+	let Some(parsed) = &ctx.sfile.parsed else { unreachable!() };
 	let cursor = SyntaxNode::new_root(parsed.green.clone());
+	let highlights = highlight::Context::new(&ctx, &ctx.sfile.lndx).traverse(cursor);
 
 	let resp = Response {
-		id,
+		id: ctx.id,
 		result: Some(
 			serde_json::to_value(SemanticTokensResult::Tokens(SemanticTokens {
 				result_id: None,
-				data: highlight::Context {
-					core,
-					ix_project,
-					hl: Highlighter::new(&sfile.lndx),
-				}
-				.traverse(cursor),
+				data: highlights,
 			}))
 			.unwrap(),
 		),
 		error: None,
 	};
 
-	conn.sender.send(Message::Response(resp))?;
+	ctx.conn.sender.send(Message::Response(resp))?;
 	Ok(())
 }
 
-pub(crate) fn req_semtokens_range(
-	core: &Core,
-	conn: &Connection,
-	ix_project: usize,
-	sfile: &SourceFile,
-	id: RequestId,
-	range: lsp_types::Range,
-) -> UnitResult {
-	let Some(parsed) = &sfile.parsed else { unreachable!() };
+pub(crate) fn req_semtokens_range(ctx: request::Context, range: lsp_types::Range) -> UnitResult {
+	let Some(parsed) = &ctx.sfile.parsed else { unreachable!() };
 	let cursor = SyntaxNode::new_root(parsed.green.clone());
 
 	let lc_start = LineCol {
@@ -414,18 +361,18 @@ pub(crate) fn req_semtokens_range(
 		col: range.end.character,
 	};
 
-	let Some(start) = sfile.lndx.offset(lc_start) else {
+	let Some(start) = ctx.sfile.lndx.offset(lc_start) else {
 		return Err(Error::Process {
 			source: None,
 			ctx: format!("invalid position {lc_start:#?}")
-		}.map_to_response(id, ErrorCode::InvalidParams));
+		}.map_to_response(ctx.id, ErrorCode::InvalidParams));
 	};
 
-	let Some(end) = sfile.lndx.offset(lc_end) else {
+	let Some(end) = ctx.sfile.lndx.offset(lc_end) else {
 		return Err(Error::Process {
 			source: None,
 			ctx: format!("invalid position {lc_end:#?}")
-		}.map_to_response(id, ErrorCode::InvalidParams));
+		}.map_to_response(ctx.id, ErrorCode::InvalidParams));
 	};
 
 	let node = match cursor.covering_element(TextRange::new(start, end)) {
@@ -433,24 +380,21 @@ pub(crate) fn req_semtokens_range(
 		NodeOrToken::Token(token) => token.parent().unwrap(),
 	};
 
+	let highlights = highlight::Context::new(&ctx, &ctx.sfile.lndx).traverse(node);
+
 	let resp = Response {
-		id,
+		id: ctx.id,
 		result: Some(
 			serde_json::to_value(SemanticTokensRangeResult::Tokens(SemanticTokens {
 				result_id: None,
-				data: highlight::Context {
-					core,
-					ix_project,
-					hl: Highlighter::new(&sfile.lndx),
-				}
-				.traverse(node),
+				data: highlights,
 			}))
 			.unwrap(),
 		),
 		error: None,
 	};
 
-	conn.sender.send(Message::Response(resp))?;
+	ctx.conn.sender.send(Message::Response(resp))?;
 	Ok(())
 }
 

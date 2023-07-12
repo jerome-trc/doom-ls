@@ -39,13 +39,13 @@ impl StringInterner {
 	}
 
 	#[must_use]
-	pub(crate) fn type_name_nocase(&self, string: &str) -> Name {
-		Name::Type(self.get_or_intern_nocase(string))
+	pub(crate) fn type_name_nocase(&self, string: &str) -> IName {
+		IName::Type(self.get_or_intern_nocase(string))
 	}
 
 	#[must_use]
-	pub(crate) fn var_name_nocase(&self, string: &str) -> Name {
-		Name::Variable(self.get_or_intern_nocase(string))
+	pub(crate) fn var_name_nocase(&self, string: &str) -> IName {
+		IName::Variable(self.get_or_intern_nocase(string))
 	}
 }
 
@@ -53,9 +53,9 @@ impl StringInterner {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct StringKey(u32);
 
-/// A [`StringKey`] tagged with a namespace.
+/// "Interned name". A [`StringKey`] tagged with a namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Name {
+pub(crate) enum IName {
 	Type(StringKey),
 	Variable(StringKey),
 	// TODO: CVars, GLDEFS objects, et cetera...

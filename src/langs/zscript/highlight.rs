@@ -7,20 +7,30 @@ use doomfront::{
 use lsp_types::SemanticToken;
 
 use crate::{
-	langs::zscript::SymbolKey,
-	project::{self, Project},
+	lines::LineIndex,
+	project::{self, FilePos, ScopeStack, StackedScope},
+	request,
 	semtokens::{Highlighter, SemToken, SemTokenFlags},
-	Core,
 };
 
+use super::Datum;
+
 pub(super) struct Context<'c> {
-	pub(super) core: &'c Core,
-	/// When performing global symbol table lookups, start here and work backwards.
-	pub(super) ix_project: usize,
-	pub(super) hl: Highlighter<'c>,
+	upper: &'c request::Context<'c>,
+	hl: Highlighter<'c>,
+	scopes: ScopeStack<'c>,
 }
 
-impl Context<'_> {
+impl<'c> Context<'c> {
+	#[must_use]
+	pub(super) fn new(upper: &'c request::Context, lndx: &'c LineIndex) -> Self {
+		Self {
+			upper,
+			hl: Highlighter::new(lndx),
+			scopes: upper.core.scope_stack(),
+		}
+	}
+
 	#[must_use]
 	pub(super) fn traverse(mut self, cursor: SyntaxNode) -> Vec<SemanticToken> {
 		let start_time = std::time::Instant::now();
@@ -35,18 +45,81 @@ impl Context<'_> {
 							self.highlight_ident(token);
 						}
 					}
-					SyntaxElem::Node(_) => {}
+					SyntaxElem::Node(node) => {
+						self.on_enter_node(node);
+					}
 				},
-				WalkEvent::Leave(_) => {}
+				WalkEvent::Leave(leave) => match leave {
+					SyntaxElem::Node(node) => {
+						self.on_leave_node(node);
+					}
+					SyntaxElem::Token(_) => {}
+				},
 			}
 		}
 
 		tracing::debug!(
-			"Semantic highlighting done in {}ms.",
+			"ZScript semantic highlighting done in {}ms.",
 			start_time.elapsed().as_millis()
 		);
 
 		self.hl.finish()
+	}
+
+	fn on_enter_node(&mut self, node: SyntaxNode) {
+		let key = FilePos {
+			file: self.upper.file_id,
+			pos: node.text_range().start(),
+		};
+
+		if Self::node_has_scope(&node) {
+			let scope = self.upper.project.zscript().scopes.get(&key).unwrap();
+
+			self.scopes.push(StackedScope {
+				inner: scope,
+				is_addendum: false,
+			});
+
+			for addendum in scope.addenda.iter() {
+				let s = self
+					.upper
+					.core
+					.projects_backwards_from(self.upper.ix_project)
+					.find_map(|p| {
+						let Some(datum) = p.lookup_global(addendum) else {
+							return None;
+						};
+
+						let project::Datum::ZScript(dat_zs) = datum;
+						let filepos = dat_zs.filepos().unwrap();
+
+						p.zscript().scopes.get(&filepos)
+					})
+					.unwrap();
+
+				// TODO: There's no way this is the best way to do this.
+
+				self.scopes.push(StackedScope {
+					inner: s,
+					is_addendum: true,
+				});
+			}
+		}
+	}
+
+	fn on_leave_node(&mut self, node: SyntaxNode) {
+		if Self::node_has_scope(&node) {
+			while self.scopes.last().is_some_and(|s| s.is_addendum) {
+				let _ = self.scopes.pop().unwrap();
+			}
+
+			self.scopes.pop().unwrap();
+		}
+	}
+
+	#[must_use]
+	fn node_has_scope(node: &SyntaxNode) -> bool {
+		matches!(node.kind(), Syn::ClassDef)
 	}
 
 	fn highlight_ident(&mut self, token: SyntaxToken) {
@@ -151,8 +224,7 @@ impl Context<'_> {
 				} else if KWS.iter().any(|kw| kw.eq_ignore_ascii_case(token.text())) {
 					self.hl.advance(SemToken::Keyword, range);
 				} else {
-					// TODO: Stack of variable scopes.
-					self.hl.advance(SemToken::Property, range);
+					self.highlight_var_name(token);
 				}
 			}
 			Syn::InheritSpec => {
@@ -443,40 +515,39 @@ impl Context<'_> {
 	}
 
 	fn highlight_type_name(&mut self, token: SyntaxToken) {
-		let name = self.core.strings.type_name_nocase(token.text());
+		let name = self.upper.core.strings.type_name_nocase(token.text());
+		let range = token.text_range();
 
-		let lookup = Project::backwards_lookup(&self.core.projects, self.ix_project, name);
-
-		if let Some((_, sym_k)) = lookup {
-			let range = token.text_range();
-
-			match sym_k {
-				project::SymbolKey::ZScript(k) => match k {
-					SymbolKey::Class(_) => self.hl.advance(SemToken::Class, range),
-					SymbolKey::MixinClass(_) => self.hl.advance(SemToken::Macro, range),
-					SymbolKey::Struct(_) => self.hl.advance(SemToken::Struct, range),
-					SymbolKey::Enum(_) => self.hl.advance(SemToken::Enum, range),
-					SymbolKey::Constant(_) => {}
-				},
+		for scope in &self.scopes {
+			if let Some(datum) = scope.get(&name) {
+				match datum {
+					project::Datum::ZScript(dat_zs) => match dat_zs {
+						Datum::Class(_) => self.hl.advance(SemToken::Class, range),
+						Datum::Enum(_) => self.hl.advance(SemToken::Enum, range),
+						Datum::MixinClass(_) => self.hl.advance(SemToken::Macro, range),
+						Datum::Struct(_) => self.hl.advance(SemToken::Struct, range),
+						Datum::Primitive => self.hl.advance(SemToken::Keyword, range),
+						Datum::Value(_) => {}
+					},
+				}
 			}
-
-			return;
 		}
+	}
 
-		const PRIMITIVE_NAMES: &[&str] = &[
-			"color",
-			"sound",
-			"spriteid",
-			"statelabel",
-			"textureid",
-			"voidptr",
-		];
+	fn highlight_var_name(&mut self, token: SyntaxToken) {
+		let range = token.text_range();
+		let name = self.upper.core.strings.var_name_nocase(token.text());
 
-		if PRIMITIVE_NAMES
-			.iter()
-			.any(|n| n.eq_ignore_ascii_case(token.text()))
-		{
-			self.hl.advance(SemToken::Keyword, token.text_range());
+		for scope in self.scopes.iter().rev() {
+			let Some(datum) = scope.get(&name) else { continue; };
+			let project::Datum::ZScript(dat_zs) = datum;
+			let Datum::Value(dat_val) = dat_zs else { continue; };
+
+			if dat_val.mutable {
+				self.hl.advance(SemToken::Property, range);
+			} else {
+				self.hl.advance(SemToken::Constant, range);
+			}
 		}
 	}
 }

@@ -18,6 +18,7 @@ use std::{
 	hash::BuildHasherDefault,
 	ops::ControlFlow,
 	path::{Path, PathBuf},
+	sync::OnceLock,
 };
 
 use crossbeam_channel::SendError;
@@ -36,7 +37,7 @@ use lsp_types::{
 	TextDocumentSyncSaveOptions, WorkDoneProgressOptions,
 };
 use names::StringInterner;
-use project::{FileId, Project};
+use project::{FileId, Project, ScopeStack};
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::Serialize;
 use tracing::{debug, error, info};
@@ -45,6 +46,8 @@ use tracing_subscriber::{
 	prelude::__tracing_subscriber_SubscriberExt,
 	util::SubscriberInitExt,
 };
+
+use crate::project::{Scope, StackedScope};
 
 pub(crate) use self::langs::*;
 
@@ -281,9 +284,16 @@ impl Core {
 	}
 
 	fn semantic_update(&mut self) {
+		let start_time = std::time::Instant::now();
+
 		for project in &mut self.projects {
 			project.update_global_symbols(&self.strings);
 		}
+
+		tracing::debug!(
+			"Server-wide semantic update done in {}ms.",
+			start_time.elapsed().as_millis()
+		);
 	}
 
 	fn build_project_list(&mut self, values: &[serde_json::Value]) {
@@ -393,6 +403,44 @@ impl Core {
 			.iter()
 			.position(|p| std::ptr::eq(p, project))
 			.unwrap()
+	}
+
+	fn projects_backwards_from(&self, from: usize) -> impl Iterator<Item = &Project> {
+		self.projects[..=from].iter().rev()
+	}
+
+	#[must_use]
+	fn scope_stack(&self) -> ScopeStack {
+		static NATIVE_SYMBOLS: OnceLock<Scope> = OnceLock::new();
+
+		let n = NATIVE_SYMBOLS.get_or_init(|| {
+			let mut scope = Scope::default();
+
+			for (name, dat) in langs::zscript::sema::native_symbols() {
+				scope.insert(
+					self.strings.type_name_nocase(name),
+					project::Datum::ZScript(dat),
+				);
+			}
+
+			scope
+		});
+
+		let mut ret = Vec::with_capacity(self.projects.len() + 1);
+
+		ret.push(StackedScope {
+			inner: n,
+			is_addendum: false,
+		});
+
+		for project in &self.projects {
+			ret.push(StackedScope {
+				inner: project.globals(),
+				is_addendum: false,
+			});
+		}
+
+		ret
 	}
 
 	fn respond_null(conn: &Connection, id: RequestId) -> UnitResult {
