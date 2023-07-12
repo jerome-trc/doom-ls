@@ -42,8 +42,7 @@ use rustc_hash::{FxHashMap, FxHasher};
 use serde::Serialize;
 use tracing::{debug, error, info};
 use tracing_subscriber::{
-	fmt::{time::Uptime, writer::BoxMakeWriter},
-	prelude::__tracing_subscriber_SubscriberExt,
+	fmt::writer::BoxMakeWriter, prelude::__tracing_subscriber_SubscriberExt,
 	util::SubscriberInitExt,
 };
 
@@ -52,15 +51,7 @@ use crate::project::{Scope, StackedScope};
 pub(crate) use self::langs::*;
 
 fn main() -> Result<(), ErrorBox> {
-	let timer = Uptime::default();
-	eprintln!("Attempting log initialization.");
-	let layer_stdout = tracing_subscriber::fmt::Layer::default()
-		.with_timer(timer)
-		.with_ansi(false)
-		.with_writer(BoxMakeWriter::new(std::io::stderr));
-	let collector = tracing_subscriber::registry().with(layer_stdout);
-	collector.init();
-
+	log_init();
 	info!("Initializing...");
 	let (conn, threads) = lsp_server::Connection::stdio();
 	let params = conn.initialize(serde_json::to_value(capabilities())?)?;
@@ -83,6 +74,41 @@ fn main() -> Result<(), ErrorBox> {
 	threads.join()?;
 	info!("Shutdown complete.");
 	Ok(())
+}
+
+fn log_init() {
+	/// Like [`tracing_subscriber::fmt::time::Uptime`] but with
+	/// hour/minute/second formatting for better clarity.
+	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+	struct Uptime(std::time::Instant);
+
+	impl Default for Uptime {
+		fn default() -> Self {
+			Self(std::time::Instant::now())
+		}
+	}
+
+	impl tracing_subscriber::fmt::time::FormatTime for Uptime {
+		fn format_time(
+			&self,
+			w: &mut tracing_subscriber::fmt::format::Writer<'_>,
+		) -> std::fmt::Result {
+			let elapsed = self.0.elapsed();
+			let mins = elapsed.as_secs() / 60;
+			let hours = mins / 60;
+			let secs = elapsed.as_secs() % 60;
+			write!(w, "{hours:02}:{mins:02}:{secs:02}")
+		}
+	}
+
+	let timer = Uptime::default();
+	eprintln!("Attempting log initialization.");
+	let layer_stdout = tracing_subscriber::fmt::Layer::default()
+		.with_timer(timer)
+		.with_ansi(false)
+		.with_writer(BoxMakeWriter::new(std::io::stderr));
+	let collector = tracing_subscriber::registry().with(layer_stdout);
+	collector.init();
 }
 
 #[must_use]
