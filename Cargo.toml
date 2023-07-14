@@ -29,6 +29,7 @@ lsp-server = "0.7"
 lsp-types = "0.94"
 nohash-hasher = "0.2.0"
 parking_lot = { version = "0.12.1", features = ["arc_lock"] }
+petgraph = "0.6.3"
 rayon = "1.7.0"
 rustc-hash = "1.0.1"
 serde = { version = "1.0.163", features = ["derive"] }

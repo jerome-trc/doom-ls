@@ -1,7 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::{
+	path::{Path, PathBuf},
+	rc::Rc,
+};
 
 use doomfront::{
-	rowan::{GreenNode, SyntaxNode, SyntaxToken, TextSize},
+	rowan::{GreenNode, SyntaxNode, SyntaxToken, TextRange},
 	LangExt, ParseError,
 };
 use lsp_types::Diagnostic;
@@ -12,8 +15,8 @@ use tracing::error;
 use crate::{
 	lines::{LineCol, LineIndex},
 	names::{IName, StringInterner},
-	zpath::{ZPath, ZPathBuf},
-	zscript, FxIndexSet, LangId,
+	paths::{FileId, PathInterner},
+	zscript, LangId,
 };
 
 #[derive(Debug)]
@@ -25,9 +28,7 @@ pub(crate) struct Project {
 	/// notification comes in. It is left until the next time the client makes
 	/// a request, at which point that file's symbols are invalidated.
 	dirty: FxHashSet<FileId>,
-	symbols: Scope,
-	// Languages ///////////////////////////////////////////////////////////////
-	zscript: zscript::Storage,
+	symbols: Rc<Scope>,
 }
 
 impl Project {
@@ -38,8 +39,7 @@ impl Project {
 			paths: PathInterner::default(),
 			files: FxHashMap::default(),
 			dirty: FxHashSet::default(),
-			symbols: Scope::default(),
-			zscript: zscript::Storage::default(),
+			symbols: Rc::<Scope>::default(),
 		}
 	}
 
@@ -48,57 +48,13 @@ impl Project {
 		&self.root
 	}
 
-	#[must_use]
-	pub(crate) fn get_path(&self, id: FileId) -> Option<&Path> {
-		self.paths
-			.case
-			.get_index(id.0 as usize)
-			.map(|p| p.as_path())
-	}
-
 	/// Note that this returns `None` if no source has been registered under
 	/// the file ID corresponding to `path` yet.
 	#[must_use]
 	pub(crate) fn get_fileid(&self, path: &Path) -> Option<FileId> {
-		self.paths
-			.case
-			.get_index_of(path)
-			.map(|i| FileId(i as u32))
+		self.paths()
+			.get_native(path)
 			.filter(|file_id| self.files.contains_key(file_id))
-	}
-
-	/// Note that this returns `None` if no source has been registered under
-	/// the file ID corresponding to `path` yet.
-	#[must_use]
-	pub(crate) fn _get_fileid_z(&self, path: &ZPath) -> Option<FileId> {
-		self.get_pathid_z(path)
-			.filter(|file_id| self.files.contains_key(file_id))
-	}
-
-	/// A counterpart to [`Self::get_fileid_z`] which does not check for
-	/// the presence of a source file.
-	#[must_use]
-	pub(crate) fn get_pathid_z(&self, path: &ZPath) -> Option<FileId> {
-		self.paths
-			.nocase
-			.get_index_of(path)
-			.map(|i| FileId(i as u32))
-	}
-
-	pub(crate) fn intern_path(&mut self, path: &Path) -> FileId {
-		if let Some(i) = self.paths.case.get_index_of(path) {
-			return FileId(i as u32);
-		}
-
-		self.paths.intern(path.to_path_buf())
-	}
-
-	pub(crate) fn intern_pathbuf(&mut self, pathbuf: PathBuf) -> FileId {
-		if let Some(i) = self.paths.case.get_index_of(&pathbuf) {
-			return FileId(i as u32);
-		}
-
-		self.paths.intern(pathbuf)
 	}
 
 	#[must_use]
@@ -116,8 +72,8 @@ impl Project {
 	}
 
 	#[must_use]
-	pub(crate) fn lookup_global(&self, qname: &IName) -> Option<&Datum> {
-		self.symbols.get(qname)
+	pub(crate) fn lookup_global(&self, iname: IName) -> Option<&Datum> {
+		self.symbols.get(&iname)
 	}
 
 	pub(crate) fn all_files(&self) -> impl Iterator<Item = (FileId, &SourceFile)> {
@@ -129,15 +85,47 @@ impl Project {
 		self.all_files().par_bridge()
 	}
 
+	#[must_use]
+	#[allow(unused)]
+	pub(crate) fn globals(&self) -> &Scope {
+		&self.symbols
+	}
+
+	#[must_use]
+	pub(crate) fn globals_mut(&mut self) -> &mut Scope {
+		Rc::get_mut(&mut self.symbols).unwrap()
+	}
+
+	pub(crate) fn scope(&self) -> &Rc<Scope> {
+		&self.symbols
+	}
+
+	#[must_use]
+	pub(crate) fn paths(&self) -> &PathInterner {
+		&self.paths
+	}
+
+	#[must_use]
+	pub(crate) fn paths_mut(&mut self) -> &mut PathInterner {
+		&mut self.paths
+	}
+
 	pub(crate) fn set_dirty(&mut self, file_id: FileId) {
 		self.dirty.insert(file_id);
 	}
 
+	pub(crate) fn on_file_delete(&mut self, path: PathBuf) {
+		if let Some(file_id) = self.get_fileid(&path) {
+			self.files.remove(&file_id);
+			self.dirty.remove(&file_id);
+		}
+	}
+
 	pub(crate) fn update_global_symbols(&mut self, strings: &StringInterner) {
 		let all_dirty = self.dirty.drain().collect::<Vec<_>>();
+		let symbols = Rc::get_mut(&mut self.symbols).unwrap() as *mut Scope;
 
 		for file_id in all_dirty {
-			let symbols = std::ptr::addr_of_mut!(self.symbols);
 			let sfile = self.get_file_mut(file_id).unwrap();
 			let Some(parsed) = sfile.parsed.as_mut() else { continue; };
 
@@ -147,7 +135,7 @@ impl Project {
 				}
 			}
 
-			let green = parsed.green.clone();
+			let green: GreenNode = parsed.green.clone();
 			let lang = sfile.lang;
 
 			let contributed = match lang {
@@ -172,34 +160,6 @@ impl Project {
 			for iname in contributed {
 				parsed.symbols.push(iname);
 			}
-		}
-	}
-
-	#[must_use]
-	#[allow(unused)]
-	pub(crate) fn globals(&self) -> &Scope {
-		&self.symbols
-	}
-
-	#[must_use]
-	pub(crate) fn globals_mut(&mut self) -> &mut Scope {
-		&mut self.symbols
-	}
-
-	#[must_use]
-	pub(crate) fn zscript(&self) -> &zscript::Storage {
-		&self.zscript
-	}
-
-	#[must_use]
-	pub(crate) fn zscript_mut(&mut self) -> &mut zscript::Storage {
-		&mut self.zscript
-	}
-
-	pub(crate) fn on_file_delete(&mut self, path: PathBuf) {
-		if let Some(file_id) = self.get_fileid(&path) {
-			self.files.remove(&file_id);
-			self.dirty.remove(&file_id);
 		}
 	}
 
@@ -293,22 +253,16 @@ impl ParsedFile {
 	}
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct FileId(
-	/// Corresponds to an element in [`PathInterner`].
-	u32,
-);
-
 #[derive(Debug)]
-pub enum ParseErrors {
+pub(crate) enum ParseErrors {
 	ZScript(Vec<ParseError<zscript::Syn>>),
 }
 
-/// Serves no special purpose; just ties together a [`FileId`] and [`TextSize`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct FilePos {
+pub(crate) struct DatumPos {
 	pub(crate) file: FileId,
-	pub(crate) pos: TextSize,
+	pub(crate) full_range: TextRange,
+	pub(crate) name_range: TextRange,
 }
 
 #[derive(Debug)]
@@ -316,53 +270,28 @@ pub(crate) enum Datum {
 	ZScript(zscript::Datum),
 }
 
-pub(crate) type ScopeStack<'s> = Vec<StackedScope<'s>>;
+impl Datum {
+	#[must_use]
+	pub(crate) fn pos(&self) -> Option<DatumPos> {
+		match self {
+			Self::ZScript(dat_zs) => dat_zs.pos(),
+		}
+	}
 
-#[derive(Debug, Default)]
-pub(crate) struct Scope {
-	pub(crate) names: FxHashMap<IName, Datum>,
-	pub(crate) addenda: Vec<IName>,
-}
-
-impl std::ops::Deref for Scope {
-	type Target = FxHashMap<IName, Datum>;
-
-	fn deref(&self) -> &Self::Target {
-		&self.names
+	pub(crate) fn add_scopes_containing(&self, scopes: &mut Vec<StackedScope>, range: TextRange) {
+		match self {
+			Self::ZScript(dat_zs) => {
+				dat_zs.add_scopes_containing(scopes, range);
+			}
+		}
 	}
 }
 
-impl std::ops::DerefMut for Scope {
-	fn deref_mut(&mut self) -> &mut Self::Target {
-		&mut self.names
-	}
-}
+pub(crate) type Scope = FxHashMap<IName, Datum>;
 
 #[derive(Debug)]
-pub(crate) struct StackedScope<'s> {
-	pub(crate) inner: &'s Scope,
+pub(crate) struct StackedScope {
+	pub(crate) ix_project: Option<usize>,
+	pub(crate) inner: Rc<Scope>,
 	pub(crate) is_addendum: bool,
-}
-
-impl std::ops::Deref for StackedScope<'_> {
-	type Target = Scope;
-
-	fn deref(&self) -> &Self::Target {
-		self.inner
-	}
-}
-
-#[derive(Debug, Default)]
-struct PathInterner {
-	case: FxIndexSet<PathBuf>,
-	nocase: FxIndexSet<ZPathBuf>,
-}
-
-impl PathInterner {
-	fn intern(&mut self, p: PathBuf) -> FileId {
-		let ret = self.case.insert_full(p.clone()).0;
-		let z = self.nocase.insert_full(ZPathBuf::new(p)).0;
-		debug_assert_eq!(ret, z);
-		FileId(ret as u32)
-	}
 }

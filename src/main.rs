@@ -6,19 +6,20 @@ mod langs;
 mod lines;
 mod names;
 mod notif;
+mod paths;
 mod project;
 mod request;
 mod semtokens;
 mod util;
-mod zpath;
 
 use std::{
+	cell::RefCell,
 	collections::VecDeque,
 	fmt::Debug,
 	hash::BuildHasherDefault,
 	ops::ControlFlow,
 	path::{Path, PathBuf},
-	sync::OnceLock,
+	rc::Rc,
 };
 
 use crossbeam_channel::SendError;
@@ -37,7 +38,8 @@ use lsp_types::{
 	TextDocumentSyncSaveOptions, WorkDoneProgressOptions,
 };
 use names::StringInterner;
-use project::{FileId, Project, ScopeStack};
+use paths::FileId;
+use project::Project;
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::Serialize;
 use tracing::{debug, error, info};
@@ -331,37 +333,38 @@ impl Core {
 			.unwrap()
 	}
 
-	fn projects_backwards_from(&self, from: usize) -> impl Iterator<Item = &Project> {
-		self.projects[..=from].iter().rev()
-	}
-
 	#[must_use]
-	fn scope_stack(&self) -> ScopeStack {
-		static NATIVE_SYMBOLS: OnceLock<Scope> = OnceLock::new();
+	fn scope_stack(&self) -> Vec<StackedScope> {
+		thread_local! {
+			static NATIVE_SYMBOLS: RefCell<Rc<Scope>> = Default::default();
+		}
 
-		let n = NATIVE_SYMBOLS.get_or_init(|| {
-			let mut scope = Scope::default();
-
-			for (name, dat) in langs::zscript::sema::native_symbols() {
-				scope.insert(
-					self.strings.type_name_nocase(name),
-					project::Datum::ZScript(dat),
-				);
-			}
-
-			scope
-		});
-
-		let mut ret = Vec::with_capacity(self.projects.len() + 1);
+		let mut ret = vec![];
 
 		ret.push(StackedScope {
-			inner: n,
+			ix_project: None,
+			inner: NATIVE_SYMBOLS.with(|n| {
+				let mut ptr = n.borrow_mut();
+
+				if !ptr.is_empty() {
+					return ptr.clone();
+				}
+
+				let scope = Rc::get_mut(&mut ptr).unwrap();
+
+				for (iname, dat) in langs::zscript::sema::native_symbols(self) {
+					scope.insert(iname, project::Datum::ZScript(dat));
+				}
+
+				ptr.clone()
+			}),
 			is_addendum: false,
 		});
 
-		for project in &self.projects {
+		for (i, project) in self.projects.iter().enumerate() {
 			ret.push(StackedScope {
-				inner: project.globals(),
+				ix_project: Some(i),
+				inner: project.scope().clone(),
 				is_addendum: false,
 			});
 		}
@@ -456,7 +459,7 @@ impl Core {
 					continue;
 				}
 
-				project.intern_path(path);
+				let _ = project.paths_mut().get_or_intern_nocase(path);
 			}
 
 			if project.root().is_dir() {

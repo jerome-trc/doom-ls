@@ -10,7 +10,8 @@ use lsp_types::request::{
 };
 
 use crate::{
-	project::{FileId, Project, SourceFile},
+	paths::FileId,
+	project::{Project, SourceFile},
 	util, zscript, Core, Error, LangId, UnitResult,
 };
 
@@ -19,6 +20,7 @@ pub(super) struct Context<'c> {
 	pub(super) conn: &'c Connection,
 	pub(super) project: &'c Project,
 	pub(super) ix_project: usize,
+	#[allow(unused)]
 	pub(super) file_id: FileId,
 	pub(super) sfile: &'c SourceFile,
 	pub(super) id: RequestId,
@@ -120,6 +122,7 @@ pub(super) fn handle(
 	})?;
 
 	req = try_request::<GotoDefinition, _>(req, |id, params| {
+		let start_time = std::time::Instant::now();
 		core.semantic_update();
 		let path = util::uri_to_pathbuf(&params.text_document_position_params.text_document.uri)?;
 
@@ -150,7 +153,14 @@ pub(super) fn handle(
 			id,
 		};
 
-		zscript::req_goto(ctx, params.text_document_position_params.position)
+		let ret = zscript::req_goto(ctx, params.text_document_position_params.position);
+
+		tracing::debug!(
+			"`textDocument/definition` request fulfilled in {}ms.",
+			start_time.elapsed().as_millis()
+		);
+
+		ret
 	})?;
 
 	req = try_request::<References, _>(req, |id, params| {

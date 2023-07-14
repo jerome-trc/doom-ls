@@ -27,10 +27,10 @@ use rayon::prelude::*;
 
 use crate::{
 	lines::{LineCol, LineIndex, TextDelta},
-	project::{self, ParseErrors, ParsedFile, Project, SourceFile},
-	request, util,
-	zpath::ZPath,
-	Core, Error, ErrorBox, LangId, UnitResult,
+	names::IName,
+	paths::PathInterner,
+	project::{self, ParseErrors, ParsedFile, Project, SourceFile, StackedScope},
+	request, util, Core, Error, ErrorBox, LangId, UnitResult,
 };
 
 pub(crate) use self::sema::*;
@@ -60,7 +60,7 @@ pub(crate) fn req_goto(ctx: request::Context, position: Position) -> UnitResult 
 		}.map_to_response(ctx.id, ErrorCode::InvalidParams));
 	};
 
-	let handler = if token.kind() == Syn::Ident {
+	if token.kind() == Syn::Ident {
 		let parent = token.parent().unwrap();
 
 		if token.text().eq_ignore_ascii_case("self") && ast::IdentExpr::can_cast(parent.kind()) {
@@ -69,98 +69,118 @@ pub(crate) fn req_goto(ctx: request::Context, position: Position) -> UnitResult 
 			tracing::debug!("GotoDefinition miss - `self` identifier.");
 			return Ok(());
 		}
-
-		req_goto_ident
-	// For now, only identifiable things can have "definitions".
-	// TODO:
-	// - `Syn::NameLit`, often identifying a class.
-	// - `Syn::StringLit`, which may be coerced to `name` and identify a class.
-	// Also support LANGUAGE IDs, GLDEFS, maybe even CVar names.
-	// - `Syn::KwSuper`; try to go to a parent class definition.
-	// - `Syn::DocComment`; support following intra-doc links.
-	// - `Syn::KwString` / `Syn::KwArray` / `Syn::KwMap` / `Syn::KwMapIterator` /
-	// `Syn::KwColor` / `Syn::KwVector2` / `Syn::KwVector3` by faking their definitions.
 	} else {
+		// For now, only identifiable things can have "definitions".
+		// TODO:
+		// - `Syn::NameLit`, often identifying a class.
+		// - `Syn::StringLit`, which may be coerced to `name` and identify a class.
+		// Also support LANGUAGE IDs, GLDEFS, maybe even CVar names.
+		// - `Syn::KwSuper`; try to go to a parent class definition.
+		// - `Syn::DocComment`; support following intra-doc links.
+		// - `Syn::KwString` / `Syn::KwArray` / `Syn::KwMap` / `Syn::KwMapIterator` /
+		// `Syn::KwColor` / `Syn::KwVector2` / `Syn::KwVector3` by faking their definitions.
 		Core::respond_null(ctx.conn, ctx.id)?;
 		tracing::debug!("GotoDefinition miss - unsupported token.");
 		return Ok(());
-	};
+	}
 
 	// TODO: If the user put in a "go to definition" request on the identifier
 	// making up the declaration, respond with a list of references.
 
-	for project in ctx.core.projects_backwards_from(ctx.ix_project) {
-		match handler(ctx.core, project, token.clone()) {
-			ControlFlow::Continue(()) => {}
-			ControlFlow::Break(Err(err)) => {
-				return Err(Error::Process {
-					source: Some(err),
-					ctx: "go-to definition error".to_string(),
-				});
-			}
-			ControlFlow::Break(Ok(resp)) => {
-				return ctx
-					.conn
-					.sender
-					.send(Message::Response(Response {
-						id: ctx.id,
-						result: Some(serde_json::to_value(resp).unwrap()),
-						error: None,
-					}))
-					.map_err(Error::from);
-			}
+	match req_goto_ident(&ctx, &token) {
+		ControlFlow::Continue(()) => {
+			tracing::debug!("GotoDefinition miss - unknown symbol.");
+			Core::respond_null(ctx.conn, ctx.id)
 		}
+		ControlFlow::Break(Err(err)) => Err(Error::Process {
+			source: Some(err),
+			ctx: "go-to definition error".to_string(),
+		}),
+		ControlFlow::Break(Ok(resp)) => ctx
+			.conn
+			.sender
+			.send(Message::Response(Response {
+				id: ctx.id,
+				result: Some(serde_json::to_value(resp).unwrap()),
+				error: None,
+			}))
+			.map_err(Error::from),
 	}
-
-	tracing::debug!("GotoDefinition miss - unknown symbol.");
-	Core::respond_null(ctx.conn, ctx.id)
 }
 
 /// Returns:
 /// - `Continue` if the symbol hasn't been found.
 /// - `Break(Ok)` if the symbol was resolved successfully.
 fn req_goto_ident(
-	core: &Core,
-	project: &Project,
-	token: SyntaxToken,
+	ctx: &request::Context,
+	token: &SyntaxToken,
 ) -> ControlFlow<Result<GotoDefinitionResponse, ErrorBox>> {
-	let text = token.text();
+	// To understand this, consider an example:
+	// - `token` is an identifier for a variable in a function in a class.
+	// - `global_node` is the class' AST node.
+	// - `name` is the class' identifier.
+	// - `datum` is the class' semantic representation object.
+	// - `datum.add_scopes_containing` adds the class scope and the function's body.
+	// - The loop starts at the function body and goes all the way "up" through to
+	// checking every previous project (in case `token` refers to an external global).
 
-	// TODO: Rather than trying every namespace, narrow down based on context.
+	let Some(global_node) = sema::global_containing(token) else {
+		return ControlFlow::Continue(());
+	};
 
-	if let Some(datum) = project.lookup_global(&core.strings.type_name_nocase(text)) {
-		return goto_symbol(project, datum, text);
-	}
+	let Some(name) = sema::top_level_name(global_node) else {
+		return ControlFlow::Continue(());
+	};
 
-	if let Some(datum) = project.lookup_global(&core.strings.var_name_nocase(text)) {
-		return goto_symbol(project, datum, text);
+	let iname_tl = ctx.core.strings.type_name_nocase(name.text());
+	let iname_tgt_t = ctx.core.strings.type_name_nocase(token.text());
+	let iname_tgt_v = ctx.core.strings.value_name_nocase(token.text());
+
+	let Some(datum) = ctx.project.lookup_global(iname_tl) else {
+		return ControlFlow::Continue(());
+	};
+
+	let mut scopes = ctx.core.scope_stack();
+	datum.add_scopes_containing(&mut scopes, token.text_range());
+
+	for scope in scopes.iter().rev() {
+		let Some(d) = [iname_tgt_t, iname_tgt_v].into_iter().find_map(|n| {
+			scope.inner.get(&n)
+		}) else {
+			continue;
+		};
+
+		let Some(i) = scope.ix_project else {
+			return ControlFlow::Continue(());
+		};
+
+		let project = &ctx.core.projects[i];
+
+		let datpos = match d {
+			project::Datum::ZScript(dat_zs) => {
+				if let Some(dpos) = dat_zs.pos() {
+					dpos
+				} else {
+					return ControlFlow::Break(Ok(GotoDefinitionResponse::Array(vec![])));
+				}
+			}
+		};
+
+		let path = project.paths().resolve_native(datpos.file).unwrap();
+		let sfile = project.get_file(datpos.file).unwrap();
+
+		return match util::make_location(
+			&sfile.lndx,
+			path,
+			datpos.name_range.start(),
+			token.text().len(),
+		) {
+			Ok(l) => ControlFlow::Break(Ok(GotoDefinitionResponse::Scalar(l))),
+			Err(err) => ControlFlow::Break(Err(Box::new(err))),
+		};
 	}
 
 	ControlFlow::Continue(())
-}
-
-fn goto_symbol(
-	project: &Project,
-	datum: &project::Datum,
-	name: &str,
-) -> ControlFlow<Result<GotoDefinitionResponse, ErrorBox>> {
-	let filepos = match datum {
-		project::Datum::ZScript(dat_zs) => {
-			if let Some(n) = dat_zs.name_filepos() {
-				n
-			} else {
-				return ControlFlow::Break(Ok(GotoDefinitionResponse::Array(vec![])));
-			}
-		}
-	};
-
-	let path = project.get_path(filepos.file).unwrap();
-	let sfile = project.get_file(filepos.file).unwrap();
-
-	match util::make_location(&sfile.lndx, path, filepos.pos, name.len()) {
-		Ok(l) => ControlFlow::Break(Ok(GotoDefinitionResponse::Scalar(l))),
-		Err(err) => ControlFlow::Break(Err(Box::new(err))),
-	}
 }
 
 pub(crate) fn req_hover(ctx: request::Context, params: HoverParams) -> UnitResult {
@@ -177,7 +197,41 @@ pub(crate) fn req_hover(ctx: request::Context, params: HoverParams) -> UnitResul
 		}.map_to_response(ctx.id, ErrorCode::InvalidParams));
 	};
 
-	let contents = match token.kind() {
+	let contents = if token.kind().is_keyword() {
+		req_hover_keyword(token)
+	} else {
+		req_hover_symbol(&ctx, token)
+	};
+
+	let hover = match contents {
+		Some(c) => Hover {
+			contents: c,
+			range: None,
+		},
+		None => {
+			ctx.conn.sender.send(Message::Response(Response {
+				id: ctx.id,
+				result: Some(serde_json::Value::Null),
+				error: None,
+			}))?;
+
+			return Ok(());
+		}
+	};
+
+	let resp = Response {
+		id: ctx.id,
+		result: Some(serde_json::to_value(hover).unwrap()),
+		error: None,
+	};
+
+	ctx.conn.sender.send(Message::Response(resp))?;
+	Ok(())
+}
+
+#[must_use]
+fn req_hover_keyword(token: SyntaxToken) -> Option<HoverContents> {
+	let ret = match token.kind() {
 		Syn::KwClass => {
 			HoverContents::Array(vec![
 				MarkedString::LanguageString(LanguageString {
@@ -197,32 +251,78 @@ pub(crate) fn req_hover(ctx: request::Context, params: HoverParams) -> UnitResul
 				])
 		}
 		_ => {
-			ctx.conn.sender.send(Message::Response(
-				Response {
-					id: ctx.id,
-					result: Some(serde_json::Value::Null),
-					error: None,
-				}
-			))?;
-
-			return Ok(());
+			return None;
 		}
 	};
 
-	let resp = Response {
-		id: ctx.id,
-		result: Some(
-			serde_json::to_value(Hover {
-				contents,
-				range: None,
-			})
-			.unwrap(),
-		),
-		error: None,
+	Some(ret)
+}
+
+#[must_use]
+fn req_hover_symbol(ctx: &request::Context, token: SyntaxToken) -> Option<HoverContents> {
+	let Some(scopes) = prepare_scope_stack(ctx, &token) else {
+		return None;
 	};
 
-	ctx.conn.sender.send(Message::Response(resp))?;
-	Ok(())
+	let iname_tgt_t = ctx.core.strings.type_name_nocase(token.text());
+	let iname_tgt_v = ctx.core.strings.value_name_nocase(token.text());
+
+	let Some(datum) = lookup_symbol(&scopes, [iname_tgt_t, iname_tgt_v]) else {
+		return None;
+	};
+
+	let project::Datum::ZScript(dat_zs) = datum;
+
+	let iname = match dat_zs {
+		Datum::Class(dat_class) => dat_class.name,
+		Datum::Value(dat_val) => dat_val.name,
+		Datum::Enum(dat_enum) => dat_enum.name,
+		Datum::MixinClass(dat_mixin) => dat_mixin.name,
+		Datum::Struct(dat_struct) => dat_struct.name,
+		Datum::Function(dat_fn) => dat_fn.name,
+		Datum::Primitive(dat_prim) => dat_prim.name,
+	};
+
+	let name_string = ctx
+		.core
+		.strings
+		.resolve_nocase(iname, |s| match dat_zs {
+			// TODO:
+			// - zscdoc support.
+			// - Symbolic constants should have types inferred and presented.
+			// - Variable values should be formatted with their type.
+			// - Function signatures.
+			Datum::Class(dat_class) => {
+				if let Some(ancestor) = dat_class.parent {
+					ctx.core
+						.strings
+						.resolve_nocase(ancestor, |s1| format!("class {s} : {s1}"))
+						.unwrap()
+				} else {
+					format!("class {s}")
+				}
+			}
+			Datum::Value(dat_val) => {
+				if dat_val.mutable {
+					s.clone().into_string()
+				} else {
+					format!("const {s}")
+				}
+			}
+			Datum::Enum(_) => format!("enum {s}"),
+			Datum::MixinClass(_) => format!("mixin class {s}"),
+			Datum::Struct(_) => format!("struct {s}"),
+			Datum::Function(_) => format!("{s}()"),
+			Datum::Primitive(_) => s.clone().into_string(),
+		})
+		.unwrap();
+
+	Some(HoverContents::Array(vec![MarkedString::LanguageString(
+		LanguageString {
+			language: "zscript".to_string(),
+			value: name_string,
+		},
+	)]))
 }
 
 pub(crate) fn req_references(
@@ -270,9 +370,10 @@ pub(crate) fn req_references(
 
 	for i in (0..=ix_project).rev() {
 		let project = &core.projects[i];
+		let paths = project.paths();
 
 		project.all_files_par().for_each(|(file_id, sfile)| {
-			let path = project.get_path(file_id).unwrap();
+			let path = paths.resolve_native(file_id).unwrap();
 			subvecs.lock().push(references_to(sfile, path, ident));
 		});
 	}
@@ -398,6 +499,42 @@ pub(crate) fn req_semtokens_range(ctx: request::Context, range: lsp_types::Range
 	Ok(())
 }
 
+#[must_use]
+fn prepare_scope_stack(ctx: &request::Context, token: &SyntaxToken) -> Option<Vec<StackedScope>> {
+	let Some(global_node) = sema::global_containing(token) else {
+		return None;
+	};
+
+	let Some(name) = sema::top_level_name(global_node) else {
+		return None;
+	};
+
+	let iname_tl = ctx.core.strings.type_name_nocase(name.text());
+
+	let Some(datum) = ctx.project.lookup_global(iname_tl) else {
+		return None;
+	};
+
+	let mut scopes = ctx.core.scope_stack();
+	datum.add_scopes_containing(&mut scopes, token.text_range());
+
+	Some(scopes)
+}
+
+#[must_use]
+fn lookup_symbol<const N: usize>(
+	scopes: &[StackedScope],
+	inames: [IName; N],
+) -> Option<&project::Datum> {
+	for scope in scopes.iter().rev() {
+		if let Some(d) = inames.into_iter().find_map(|n| scope.inner.get(&n)) {
+			return Some(d);
+		}
+	}
+
+	None
+}
+
 // Notification handling ///////////////////////////////////////////////////////
 
 /// Uses the [`rayon`] global thread pool.
@@ -410,7 +547,7 @@ pub(crate) fn rebuild_include_tree(
 ) -> std::io::Result<Vec<Diagnostic>> {
 	#[derive(Debug, Clone, Copy)]
 	struct Context<'p> {
-		project: &'p Project,
+		paths: &'p PathInterner,
 		output: &'p Mutex<Vec<StagedFile>>,
 		diags: &'p Mutex<Vec<Diagnostic>>,
 	}
@@ -446,14 +583,14 @@ pub(crate) fn rebuild_include_tree(
 			};
 
 			let Some(file_id) = ctx
-				.project
-				.get_pathid_z(ZPath::new(&complete))
+				.paths
+				.get_nocase(&complete)
 				 else {
 					tracing::error!("Failed to get interned ZDoom path: `{}`", complete.display());
 					return;
 				};
 
-			let real_path = ctx.project.get_path(file_id).unwrap();
+			let real_path = ctx.paths.resolve_native(file_id).unwrap();
 
 			let text = match std::fs::read_to_string(real_path) {
 				Ok(s) => s,
@@ -557,7 +694,7 @@ pub(crate) fn rebuild_include_tree(
 	let diags = Mutex::new(vec![]);
 
 	let ctx = Context {
-		project,
+		paths: project.paths(),
 		output: &output,
 		diags: &diags,
 	};
@@ -567,7 +704,7 @@ pub(crate) fn rebuild_include_tree(
 	let output = output.into_inner();
 
 	for file in output {
-		let file_id = project.intern_pathbuf(file.path);
+		let file_id = project.paths_mut().get_or_intern_nocase(&file.path);
 		project.set_file(file_id, file.source);
 		project.set_dirty(file_id);
 	}

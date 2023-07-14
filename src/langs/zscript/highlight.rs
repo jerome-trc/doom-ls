@@ -8,7 +8,8 @@ use lsp_types::SemanticToken;
 
 use crate::{
 	lines::LineIndex,
-	project::{self, FilePos, ScopeStack, StackedScope},
+	names::IName,
+	project::{self, StackedScope},
 	request,
 	semtokens::{Highlighter, SemToken, SemTokenFlags},
 };
@@ -18,7 +19,7 @@ use super::Datum;
 pub(super) struct Context<'c> {
 	upper: &'c request::Context<'c>,
 	hl: Highlighter<'c>,
-	scopes: ScopeStack<'c>,
+	scopes: Vec<StackedScope>,
 }
 
 impl<'c> Context<'c> {
@@ -67,59 +68,61 @@ impl<'c> Context<'c> {
 	}
 
 	fn on_enter_node(&mut self, node: SyntaxNode) {
-		let key = FilePos {
-			file: self.upper.file_id,
-			pos: node.text_range().start(),
-		};
-
-		if Self::node_has_scope(&node) {
-			let scope = self.upper.project.zscript().scopes.get(&key).unwrap();
-
-			self.scopes.push(StackedScope {
-				inner: scope,
-				is_addendum: false,
-			});
-
-			for addendum in scope.addenda.iter() {
-				let s = self
-					.upper
-					.core
-					.projects_backwards_from(self.upper.ix_project)
-					.find_map(|p| {
-						let Some(datum) = p.lookup_global(addendum) else {
-							return None;
-						};
-
-						let project::Datum::ZScript(dat_zs) = datum;
-						let filepos = dat_zs.filepos().unwrap();
-
-						p.zscript().scopes.get(&filepos)
-					})
-					.unwrap();
-
-				// TODO: There's no way this is the best way to do this.
+		match node.kind() {
+			Syn::ClassDef => {
+				let classdef = ast::ClassDef::cast(node).unwrap();
+				let Ok(class_name) = classdef.name() else { return; };
+				let iname = self.upper.core.strings.type_name_nocase(class_name.text());
+				let Some(datum) = self.lookup(iname) else { return; };
+				let project::Datum::ZScript(dat_zs) = datum;
+				let Datum::Class(dat_class) = dat_zs else { return; };
+				let parent = dat_class.parent;
 
 				self.scopes.push(StackedScope {
-					inner: s,
-					is_addendum: true,
+					ix_project: Some(self.upper.ix_project),
+					inner: dat_class.scope.clone(),
+					is_addendum: false,
+				});
+
+				if let Some(p) = parent {
+					let Some(datum) = self.lookup(p) else { return; };
+					let project::Datum::ZScript(dat_zs) = datum;
+					let Datum::Class(dat_class) = dat_zs else { return; };
+
+					self.scopes.push(StackedScope {
+						ix_project: Some(self.upper.ix_project),
+						inner: dat_class.scope.clone(),
+						is_addendum: true,
+					});
+				}
+			}
+			Syn::StructDef => {
+				let structdef = ast::StructDef::cast(node).unwrap();
+				let Ok(struct_name) = structdef.name() else { return; };
+				let iname = self.upper.core.strings.type_name_nocase(struct_name.text());
+				let Some(datum) = self.lookup(iname) else { return; };
+				let project::Datum::ZScript(dat_zs) = datum;
+				let Datum::Struct(dat_struct) = dat_zs else { return; };
+
+				self.scopes.push(StackedScope {
+					ix_project: Some(self.upper.ix_project),
+					inner: dat_struct.scope.clone(),
+					is_addendum: false,
 				});
 			}
+			// TODO: Everything else! Don't forget to update `on_leave_node`.
+			_ => {}
 		}
 	}
 
 	fn on_leave_node(&mut self, node: SyntaxNode) {
-		if Self::node_has_scope(&node) {
+		if matches!(node.kind(), Syn::ClassDef | Syn::StructDef) {
 			while self.scopes.last().is_some_and(|s| s.is_addendum) {
 				let _ = self.scopes.pop().unwrap();
 			}
 
 			self.scopes.pop().unwrap();
 		}
-	}
-
-	#[must_use]
-	fn node_has_scope(node: &SyntaxNode) -> bool {
-		matches!(node.kind(), Syn::ClassDef)
 	}
 
 	fn highlight_ident(&mut self, token: SyntaxToken) {
@@ -195,7 +198,11 @@ impl<'c> Context<'c> {
 				self.hl.advance(SemToken::Property, range);
 			}
 			Syn::FunctionDecl => {
-				self.hl.advance(SemToken::Function, range);
+				let fndecl = ast::FunctionDecl::cast(parent).unwrap();
+
+				if fndecl.name() == token {
+					self.hl.advance(SemToken::Function, range);
+				}
 			}
 			Syn::IdentChain => {
 				let grandparent = parent.parent().unwrap();
@@ -224,7 +231,7 @@ impl<'c> Context<'c> {
 				} else if KWS.iter().any(|kw| kw.eq_ignore_ascii_case(token.text())) {
 					self.hl.advance(SemToken::Keyword, range);
 				} else {
-					self.highlight_var_name(token);
+					self.highlight_value_name(token);
 				}
 			}
 			Syn::InheritSpec => {
@@ -515,39 +522,41 @@ impl<'c> Context<'c> {
 	}
 
 	fn highlight_type_name(&mut self, token: SyntaxToken) {
-		let name = self.upper.core.strings.type_name_nocase(token.text());
+		let iname = self.upper.core.strings.type_name_nocase(token.text());
 		let range = token.text_range();
 
-		for scope in &self.scopes {
-			if let Some(datum) = scope.get(&name) {
-				match datum {
-					project::Datum::ZScript(dat_zs) => match dat_zs {
-						Datum::Class(_) => self.hl.advance(SemToken::Class, range),
-						Datum::Enum(_) => self.hl.advance(SemToken::Enum, range),
-						Datum::MixinClass(_) => self.hl.advance(SemToken::Macro, range),
-						Datum::Struct(_) => self.hl.advance(SemToken::Struct, range),
-						Datum::Primitive => self.hl.advance(SemToken::Keyword, range),
-						Datum::Value(_) => {}
-					},
-				}
-			}
+		let Some(datum) = self.lookup(iname) else { return; };
+		let project::Datum::ZScript(dat_zs) = datum;
+
+		match dat_zs {
+			Datum::Class(_) => self.hl.advance(SemToken::Class, range),
+			Datum::Enum(_) => self.hl.advance(SemToken::Enum, range),
+			Datum::MixinClass(_) => self.hl.advance(SemToken::Macro, range),
+			Datum::Primitive(_) => self.hl.advance(SemToken::Keyword, range),
+			Datum::Struct(_) => self.hl.advance(SemToken::Struct, range),
+			Datum::Value(_) | Datum::Function(_) => {}
 		}
 	}
 
-	fn highlight_var_name(&mut self, token: SyntaxToken) {
+	fn highlight_value_name(&mut self, token: SyntaxToken) {
 		let range = token.text_range();
-		let name = self.upper.core.strings.var_name_nocase(token.text());
+		let iname = self.upper.core.strings.value_name_nocase(token.text());
 
-		for scope in self.scopes.iter().rev() {
-			let Some(datum) = scope.get(&name) else { continue; };
-			let project::Datum::ZScript(dat_zs) = datum;
-			let Datum::Value(dat_val) = dat_zs else { continue; };
+		let Some(datum) = self.lookup(iname) else { return; };
+		let project::Datum::ZScript(dat_zs) = datum;
+		let Datum::Value(dat_val) = dat_zs else { return; };
 
-			if dat_val.mutable {
-				self.hl.advance(SemToken::Property, range);
-			} else {
-				self.hl.advance(SemToken::Constant, range);
-			}
+		if dat_val.mutable {
+			self.hl.advance(SemToken::Property, range);
+		} else {
+			self.hl.advance(SemToken::Constant, range);
 		}
+	}
+
+	fn lookup(&self, iname: IName) -> Option<&project::Datum> {
+		self.scopes
+			.iter()
+			.rev()
+			.find_map(|scope| scope.inner.get(&iname))
 	}
 }

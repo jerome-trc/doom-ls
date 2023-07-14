@@ -44,8 +44,26 @@ impl StringInterner {
 	}
 
 	#[must_use]
-	pub(crate) fn var_name_nocase(&self, string: &str) -> IName {
-		IName::Variable(self.get_or_intern_nocase(string))
+	pub(crate) fn value_name_nocase(&self, string: &str) -> IName {
+		IName::Value(self.get_or_intern_nocase(string))
+	}
+
+	#[must_use]
+	pub(crate) fn resolve_nocase<F, R>(&self, iname: IName, mut callback: F) -> Option<R>
+	where
+		F: FnMut(&Box<str>) -> R,
+	{
+		let key = match iname {
+			IName::Type(k) | IName::Value(k) => k,
+		};
+
+		self.nocase
+			.borrow()
+			.get_index(key.0 as usize)
+			.map(|zstring| {
+				let inner = &zstring.0;
+				callback(inner)
+			})
 	}
 }
 
@@ -57,7 +75,7 @@ pub(crate) struct StringKey(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum IName {
 	Type(StringKey),
-	Variable(StringKey),
+	Value(StringKey),
 	// TODO: CVars, GLDEFS objects, et cetera...
 }
 

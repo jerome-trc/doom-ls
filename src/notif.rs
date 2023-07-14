@@ -96,7 +96,7 @@ pub(super) fn handle(
 					};
 
 					let text = std::fs::read_to_string(&path)?;
-					let file_id = project.intern_pathbuf(path);
+					let file_id = project.paths_mut().get_or_intern_native(&path);
 					let lndx = LineIndex::new(&text);
 
 					let _ = project.set_file(

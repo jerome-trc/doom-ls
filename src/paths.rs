@@ -1,4 +1,4 @@
-//! Abstractions for ASCII case-insensitive file paths.
+//! File path interning and ASCII case-insensitive file paths.
 
 use std::{
 	borrow::Borrow,
@@ -8,18 +8,77 @@ use std::{
 	path::{Path, PathBuf},
 };
 
+use crate::FxIndexSet;
+
+#[derive(Debug, Default)]
+pub(crate) struct PathInterner {
+	native: FxIndexSet<Box<Path>>,
+	nocase: FxIndexSet<Box<ZPath>>,
+}
+
+impl PathInterner {
+	#[must_use]
+	pub(crate) fn get_native(&self, path: &Path) -> Option<FileId> {
+		self.native.get_full(path).map(|(i, _)| FileId(i as u32))
+	}
+
+	#[must_use]
+	pub(crate) fn get_nocase(&self, path: &Path) -> Option<FileId> {
+		self.nocase
+			.get_full(ZPath::new(path))
+			.map(|(i, _)| FileId(i as u32))
+	}
+
+	#[must_use]
+	pub(crate) fn get_or_intern_native(&mut self, path: &Path) -> FileId {
+		match self.native.get_full(path) {
+			Some((i, _)) => FileId(i as u32),
+			None => {
+				let native = path.to_owned().into_boxed_path();
+				// SAFETY: All memory representations involved here are identical.
+				let nocase = unsafe { std::mem::transmute(native.clone()) };
+				let _ = self.native.insert(native);
+				let ret = self.nocase.insert_full(nocase).0;
+				FileId(ret as u32)
+			}
+		}
+	}
+
+	#[must_use]
+	pub(crate) fn get_or_intern_nocase(&mut self, path: &Path) -> FileId {
+		match self.nocase.get_full(ZPath::new(path)) {
+			Some((i, _)) => FileId(i as u32),
+			None => {
+				let native = path.to_owned().into_boxed_path();
+				// SAFETY: All memory representations involved here are identical.
+				let nocase = unsafe { std::mem::transmute::<_, _>(native.clone()) };
+				let _ = self.native.insert_full(native);
+				let ret = self.nocase.insert_full(nocase).0;
+				FileId(ret as u32)
+			}
+		}
+	}
+
+	#[must_use]
+	pub(crate) fn resolve_native(&self, file_id: FileId) -> Option<&Path> {
+		self.native
+			.get_index(file_id.0 as usize)
+			.map(|b| b.as_ref())
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct FileId(
+	/// Corresponds to an element in [`PathInterner`].
+	u32,
+);
+
 /// [`PathBuf`] with ASCII-case insensitive equality comparison and hashing.
 ///
 /// Only for use with (G)ZDoom.
 #[derive(Debug, Clone)]
-pub(crate) struct ZPathBuf(PathBuf);
-
-impl ZPathBuf {
-	#[must_use]
-	pub(crate) fn new(inner: PathBuf) -> Self {
-		Self(inner)
-	}
-}
+#[repr(transparent)]
+struct ZPathBuf(PathBuf);
 
 impl PartialEq for ZPathBuf {
 	fn eq(&self, other: &Self) -> bool {
@@ -66,7 +125,8 @@ impl<T: ?Sized + AsRef<OsStr>> From<&T> for ZPathBuf {
 }
 
 #[derive(Debug, PartialOrd, Ord)]
-pub(crate) struct ZPath(Path);
+#[repr(transparent)]
+struct ZPath(Path);
 
 impl PartialEq for ZPath {
 	fn eq(&self, other: &Self) -> bool {
