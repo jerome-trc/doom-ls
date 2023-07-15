@@ -24,6 +24,9 @@ pub(crate) enum SemToken {
 	Struct,
 	Type,
 	TypeParam,
+	// Added by DoomLS /////////////////////////////////////////////////////////
+	EscapeSeq,
+	FormatSpec,
 }
 
 impl From<SemToken> for SemanticTokenType {
@@ -46,6 +49,8 @@ impl From<SemToken> for SemanticTokenType {
 			SemToken::Struct => Self::STRUCT,
 			SemToken::Type => Self::TYPE,
 			SemToken::TypeParam => Self::TYPE_PARAMETER,
+			SemToken::EscapeSeq => Self::new("escapeSequence"),
+			SemToken::FormatSpec => Self::new("formatSpecifier"),
 		}
 	}
 }
@@ -137,6 +142,8 @@ pub(crate) fn legend() -> SemanticTokensLegend {
 		SemToken::Struct.into(),
 		SemToken::Type.into(),
 		SemToken::TypeParam.into(),
+		SemToken::EscapeSeq.into(),
+		SemToken::FormatSpec.into(),
 	];
 
 	let modifiers = vec![

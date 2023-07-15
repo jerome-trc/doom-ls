@@ -1,10 +1,13 @@
 //! Semantic token highlighting.
 
+use std::sync::OnceLock;
+
 use doomfront::{
 	rowan::{ast::AstNode, TextRange, TextSize, WalkEvent},
 	zdoom::zscript::{ast, Syn, SyntaxElem, SyntaxNode, SyntaxToken},
 };
 use lsp_types::SemanticToken;
+use regex::Regex;
 
 use crate::{
 	lines::LineIndex,
@@ -492,7 +495,7 @@ impl<'c> Context<'c> {
 
 		match syn {
 			Syn::IntLit | Syn::FloatLit => self.hl.advance(SemToken::Number, range),
-			Syn::StringLit => self.hl.advance(SemToken::String, range),
+			Syn::StringLit => self.highlight_string_literal(token),
 			Syn::NameLit => {
 				self.hl.advance(
 					SemToken::String,
@@ -518,6 +521,58 @@ impl<'c> Context<'c> {
 			Syn::Comment | Syn::DocComment => self.hl.advance(SemToken::Comment, range),
 			// Whitespace, unknown, state sprites, state frames, or previously handled.
 			_ => {}
+		}
+	}
+
+	fn highlight_string_literal(&mut self, token: SyntaxToken) {
+		static REGEX: OnceLock<Regex> = OnceLock::new();
+
+		let rgx = REGEX.get_or_init(|| {
+			Regex::new(
+				r"(?x)
+			(%[spcdiuxXofFeEgGaA])|
+			(\\c\[\w+\])|
+			(\\[nt])
+			",
+			)
+			.unwrap()
+		});
+
+		let mut pos = token.text_range().start();
+		let mut any = false;
+
+		for capset in rgx.captures_iter(token.text()) {
+			let (semtoken, range) = if let Some(capture) = capset.get(1) {
+				(SemToken::FormatSpec, capture.range())
+			} else if let Some(capture) = capset.get(2).or(capset.get(3)) {
+				(SemToken::EscapeSeq, capture.range())
+			} else {
+				unreachable!()
+			};
+
+			let r = TextRange::new(
+				TextSize::from(u32::from(token.text_range().start()) + range.start as u32),
+				TextSize::from(u32::from(token.text_range().start()) + range.end as u32),
+			);
+
+			let s = TextRange::new(pos, r.start());
+
+			if s.len() > TextSize::from(0) {
+				self.hl.advance(SemToken::String, s);
+			}
+
+			self.hl.advance(semtoken, r);
+			pos = r.end();
+			any = true;
+		}
+
+		if !any {
+			self.hl.advance(SemToken::String, token.text_range());
+		} else {
+			self.hl.advance(
+				SemToken::String,
+				TextRange::new(pos, token.text_range().end()),
+			);
 		}
 	}
 

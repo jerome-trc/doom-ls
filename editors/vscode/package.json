@@ -935,6 +935,16 @@
 	],
     "commands": [
     ],
+	"semanticTokenTypes": [
+		{
+			"id": "escapeSequence",
+			"description": "Style for char escapes (e.g. newlines, color tags) in strings"
+		},
+		{
+			"id": "formatSpecifier",
+			"description": "Style for `%#` placeholders in format strings"
+		}
+	],
 	"semanticTokenScopes": [
 		{
 			"language": "zscript",
@@ -947,6 +957,12 @@
 				],
 				"*.member": [
 					"markup.underline"
+				],
+				"escapeSequence": [
+					"constant.character.escape.rust"
+				],
+				"formatSpecifier": [
+					"punctuation.section.embedded.zscript"
 				]
 			}
 		}
