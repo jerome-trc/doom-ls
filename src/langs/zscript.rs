@@ -14,7 +14,10 @@ use std::{
 pub(crate) use doomfront::zdoom::zscript::Syn;
 use doomfront::{
 	rowan::{ast::AstNode, GreenNode, Language, NodeOrToken, TextRange, TextSize, WalkEvent},
-	zdoom::zscript::{ast, SyntaxNode, SyntaxToken},
+	zdoom::{
+		ast::LitToken,
+		zscript::{ast, SyntaxNode, SyntaxToken},
+	},
 	ParseError,
 };
 use lsp_server::{Connection, ErrorCode, Message, RequestId, Response};
@@ -60,52 +63,73 @@ pub(crate) fn req_goto(ctx: request::Context, position: Position) -> UnitResult 
 		}.map_to_response(ctx.id, ErrorCode::InvalidParams));
 	};
 
-	if token.kind() == Syn::Ident {
-		let parent = token.parent().unwrap();
+	match token.kind() {
+		Syn::Ident => {
+			let parent = token.parent().unwrap();
 
-		if token.text().eq_ignore_ascii_case("self") && ast::IdentExpr::can_cast(parent.kind()) {
-			// No useful information to provide here.
-			Core::respond_null(ctx.conn, ctx.id)?;
-			tracing::debug!("GotoDefinition miss - `self` identifier.");
-			return Ok(());
+			if token.text().eq_ignore_ascii_case("self") && ast::IdentExpr::can_cast(parent.kind())
+			{
+				// No useful information to provide here.
+				Core::respond_null(ctx.conn, ctx.id)?;
+				tracing::debug!("GotoDefinition miss - `self` identifier.");
+				return Ok(());
+			}
+
+			match req_goto_ident(&ctx, token) {
+				ControlFlow::Continue(()) => {
+					tracing::debug!("GotoDefinition miss - unknown symbol.");
+					Core::respond_null(ctx.conn, ctx.id)
+				}
+				ControlFlow::Break(Err(err)) => Err(Error::Process {
+					source: Some(err),
+					ctx: "go-to definition error".to_string(),
+				}),
+				ControlFlow::Break(Ok(resp)) => ctx
+					.conn
+					.sender
+					.send(Message::Response(Response {
+						id: ctx.id,
+						result: Some(serde_json::to_value(resp).unwrap()),
+						error: None,
+					}))
+					.map_err(Error::from),
+			}
 		}
-	} else {
-		// For now, only identifiable things can have "definitions".
-		// TODO:
-		// - `Syn::NameLit`, often identifying a class.
-		// - `Syn::StringLit`, which may be coerced to `name` and identify a class.
-		// Also support LANGUAGE IDs, GLDEFS, maybe even CVar names.
-		// - `Syn::KwSuper`; try to go to a parent class definition.
-		// - `Syn::DocComment`; support following intra-doc links.
-		// - `Syn::KwString` / `Syn::KwArray` / `Syn::KwMap` / `Syn::KwMapIterator` /
-		// `Syn::KwColor` / `Syn::KwVector2` / `Syn::KwVector3` by faking their definitions.
-		Core::respond_null(ctx.conn, ctx.id)?;
-		tracing::debug!("GotoDefinition miss - unsupported token.");
-		return Ok(());
+		Syn::NameLit => match req_goto_name(&ctx, token) {
+			ControlFlow::Continue(()) => {
+				tracing::debug!("GotoDefinition miss - unknown symbol.");
+				Core::respond_null(ctx.conn, ctx.id)
+			}
+			ControlFlow::Break(Err(err)) => Err(Error::Process {
+				source: Some(err),
+				ctx: "go-to definition error".to_string(),
+			}),
+			ControlFlow::Break(Ok(resp)) => ctx
+				.conn
+				.sender
+				.send(Message::Response(Response {
+					id: ctx.id,
+					result: Some(serde_json::to_value(resp).unwrap()),
+					error: None,
+				}))
+				.map_err(Error::from),
+		},
+		other => {
+			// TODO:
+			// - `Syn::StringLit`, which may be coerced to `name` and identify a class.
+			// Also support LANGUAGE IDs, GLDEFS, maybe even CVar names.
+			// - `Syn::KwSuper`; try to go to a parent class definition.
+			// - `Syn::DocComment`; support following intra-doc links.
+			// - `Syn::KwString` / `Syn::KwArray` / `Syn::KwMap` / `Syn::KwMapIterator` /
+			// `Syn::KwColor` / `Syn::KwVector2` / `Syn::KwVector3` by faking their definitions.
+			Core::respond_null(ctx.conn, ctx.id)?;
+			tracing::debug!("GotoDefinition miss - unsupported token {other:#?}.");
+			Ok(())
+		}
 	}
 
 	// TODO: If the user put in a "go to definition" request on the identifier
 	// making up the declaration, respond with a list of references.
-
-	match req_goto_ident(&ctx, &token) {
-		ControlFlow::Continue(()) => {
-			tracing::debug!("GotoDefinition miss - unknown symbol.");
-			Core::respond_null(ctx.conn, ctx.id)
-		}
-		ControlFlow::Break(Err(err)) => Err(Error::Process {
-			source: Some(err),
-			ctx: "go-to definition error".to_string(),
-		}),
-		ControlFlow::Break(Ok(resp)) => ctx
-			.conn
-			.sender
-			.send(Message::Response(Response {
-				id: ctx.id,
-				result: Some(serde_json::to_value(resp).unwrap()),
-				error: None,
-			}))
-			.map_err(Error::from),
-	}
 }
 
 /// Returns:
@@ -113,74 +137,27 @@ pub(crate) fn req_goto(ctx: request::Context, position: Position) -> UnitResult 
 /// - `Break(Ok)` if the symbol was resolved successfully.
 fn req_goto_ident(
 	ctx: &request::Context,
-	token: &SyntaxToken,
+	token: SyntaxToken,
 ) -> ControlFlow<Result<GotoDefinitionResponse, ErrorBox>> {
-	// To understand this, consider an example:
-	// - `token` is an identifier for a variable in a function in a class.
-	// - `global_node` is the class' AST node.
-	// - `name` is the class' identifier.
-	// - `datum` is the class' semantic representation object.
-	// - `datum.add_scopes_containing` adds the class scope and the function's body.
-	// - The loop starts at the function body and goes all the way "up" through to
-	// checking every previous project (in case `token` refers to an external global).
-
-	let Some(global_node) = sema::global_containing(token) else {
-		return ControlFlow::Continue(());
-	};
-
-	let Some(name) = sema::top_level_name(global_node) else {
-		return ControlFlow::Continue(());
-	};
-
-	let iname_tl = ctx.core.strings.type_name_nocase(name.text());
 	let iname_tgt_t = ctx.core.strings.type_name_nocase(token.text());
 	let iname_tgt_v = ctx.core.strings.value_name_nocase(token.text());
 
-	let Some(datum) = ctx.project.lookup_global(iname_tl) else {
+	let Some(scopes) = prepare_scope_stack(ctx, &token) else {
 		return ControlFlow::Continue(());
 	};
 
-	let mut scopes = ctx.core.scope_stack();
-	datum.add_scopes_containing(&mut scopes, token.text_range());
+	location_by_inames(ctx, &scopes, [iname_tgt_t, iname_tgt_v], &token)
+}
 
-	for scope in scopes.iter().rev() {
-		let Some(d) = [iname_tgt_t, iname_tgt_v].into_iter().find_map(|n| {
-			scope.inner.get(&n)
-		}) else {
-			continue;
-		};
-
-		let Some(i) = scope.ix_project else {
-			return ControlFlow::Continue(());
-		};
-
-		let project = &ctx.core.projects[i];
-
-		let datpos = match d {
-			project::Datum::ZScript(dat_zs) => {
-				if let Some(dpos) = dat_zs.pos() {
-					dpos
-				} else {
-					return ControlFlow::Break(Ok(GotoDefinitionResponse::Array(vec![])));
-				}
-			}
-		};
-
-		let path = project.paths().resolve_native(datpos.file).unwrap();
-		let sfile = project.get_file(datpos.file).unwrap();
-
-		return match util::make_location(
-			&sfile.lndx,
-			path,
-			datpos.name_range.start(),
-			token.text().len(),
-		) {
-			Ok(l) => ControlFlow::Break(Ok(GotoDefinitionResponse::Scalar(l))),
-			Err(err) => ControlFlow::Break(Err(Box::new(err))),
-		};
-	}
-
-	ControlFlow::Continue(())
+fn req_goto_name(
+	ctx: &request::Context,
+	token: SyntaxToken,
+) -> ControlFlow<Result<GotoDefinitionResponse, ErrorBox>> {
+	let scopes = ctx.core.scope_stack();
+	let lit = LitToken::new(token);
+	let text = lit.name().unwrap();
+	let iname = ctx.core.strings.type_name_nocase(text);
+	location_by_inames(ctx, &scopes, [iname], lit.syntax())
 }
 
 pub(crate) fn req_references(
@@ -359,6 +336,13 @@ pub(crate) fn req_semtokens_range(ctx: request::Context, range: lsp_types::Range
 
 #[must_use]
 fn prepare_scope_stack(ctx: &request::Context, token: &SyntaxToken) -> Option<Vec<StackedScope>> {
+	// To understand this, consider an example:
+	// - `token` is an identifier for a variable in a function in a class.
+	// - `global_node` is the class' AST node.
+	// - `name` is the class' identifier.
+	// - `datum` is the class' semantic representation object.
+	// - `datum.add_scopes_containing` adds the class scope and the function's body.
+
 	let Some(global_node) = sema::global_containing(token) else {
 		return None;
 	};
@@ -391,6 +375,53 @@ fn lookup_symbol<const N: usize>(
 	}
 
 	None
+}
+
+#[must_use]
+fn location_by_inames<const N: usize>(
+	ctx: &request::Context,
+	scopes: &[StackedScope],
+	inames: [IName; N],
+	token: &SyntaxToken,
+) -> ControlFlow<Result<GotoDefinitionResponse, ErrorBox>> {
+	for scope in scopes.iter().rev() {
+		let Some(d) = inames.into_iter().find_map(|n| {
+			scope.inner.get(&n)
+		}) else {
+			continue;
+		};
+
+		let Some(i) = scope.ix_project else {
+			return ControlFlow::Continue(());
+		};
+
+		let project = &ctx.core.projects[i];
+
+		let datpos = match d {
+			project::Datum::ZScript(dat_zs) => {
+				if let Some(dpos) = dat_zs.pos() {
+					dpos
+				} else {
+					return ControlFlow::Break(Ok(GotoDefinitionResponse::Array(vec![])));
+				}
+			}
+		};
+
+		let path = project.paths().resolve_native(datpos.file).unwrap();
+		let sfile = project.get_file(datpos.file).unwrap();
+
+		return match util::make_location(
+			&sfile.lndx,
+			path,
+			datpos.name_range.start(),
+			token.text().len(),
+		) {
+			Ok(l) => ControlFlow::Break(Ok(GotoDefinitionResponse::Scalar(l))),
+			Err(err) => ControlFlow::Break(Err(Box::new(err))),
+		};
+	}
+
+	ControlFlow::Continue(())
 }
 
 // Notification handling ///////////////////////////////////////////////////////

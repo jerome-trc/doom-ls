@@ -2,7 +2,10 @@
 
 use doomfront::{
 	rowan::ast::AstNode,
-	zdoom::zscript::{ast, Syn, SyntaxElem, SyntaxNode, SyntaxToken},
+	zdoom::{
+		ast::LitToken,
+		zscript::{ast, Syn, SyntaxElem, SyntaxNode, SyntaxToken},
+	},
 };
 use lsp_server::{ErrorCode, Message, Response};
 use lsp_types::{Hover, HoverContents, HoverParams, LanguageString, MarkedString};
@@ -28,10 +31,14 @@ pub(crate) fn req_hover(ctx: request::Context, params: HoverParams) -> UnitResul
 		}.map_to_response(ctx.id, ErrorCode::InvalidParams));
 	};
 
-	let contents = if !token.kind().is_keyword() {
-		req_hover_symbol(&ctx, token)
-	} else {
+	let contents = if token.kind() == Syn::Ident {
+		req_hover_ident(&ctx, token)
+	} else if token.kind() == Syn::NameLit {
+		req_hover_namelit(&ctx, token)
+	} else if token.kind().is_keyword() {
 		req_hover_keyword(token)
+	} else {
+		return Core::respond_null(ctx.conn, ctx.id);
 	};
 
 	let hover = match contents {
@@ -61,7 +68,7 @@ pub(crate) fn req_hover(ctx: request::Context, params: HoverParams) -> UnitResul
 }
 
 #[must_use]
-fn req_hover_symbol(ctx: &request::Context, token: SyntaxToken) -> Option<HoverContents> {
+fn req_hover_ident(ctx: &request::Context, token: SyntaxToken) -> Option<HoverContents> {
 	let Some(scopes) = super::prepare_scope_stack(ctx, &token) else {
 		return None;
 	};
@@ -74,8 +81,26 @@ fn req_hover_symbol(ctx: &request::Context, token: SyntaxToken) -> Option<HoverC
 	};
 
 	let project::Datum::ZScript(dat_zs) = datum;
+	Some(symbol_hover(ctx, dat_zs))
+}
 
-	let iname = match dat_zs {
+#[must_use]
+fn req_hover_namelit(ctx: &request::Context, token: SyntaxToken) -> Option<HoverContents> {
+	let scopes = ctx.core.scope_stack();
+	let lit = LitToken::new(token);
+	let text = lit.name().unwrap();
+	let iname = ctx.core.strings.type_name_nocase(text);
+
+	let Some(datum) = super::lookup_symbol(&scopes, [iname]) else {
+		return None;
+	};
+
+	let project::Datum::ZScript(dat_zs) = datum;
+	Some(symbol_hover(ctx, dat_zs))
+}
+
+fn symbol_hover(ctx: &request::Context, datum: &Datum) -> HoverContents {
+	let iname = match datum {
 		Datum::Class(dat_class) => dat_class.name,
 		Datum::Value(dat_val) => dat_val.name,
 		Datum::Enum(dat_enum) => dat_enum.name,
@@ -88,7 +113,7 @@ fn req_hover_symbol(ctx: &request::Context, token: SyntaxToken) -> Option<HoverC
 	let (code, docs) = ctx
 		.core
 		.strings
-		.resolve_nocase(iname, |s| match dat_zs {
+		.resolve_nocase(iname, |s| match datum {
 			Datum::Class(dat_class) => format_class_info(ctx, dat_class, s),
 			Datum::Value(dat_val) => match &dat_val.source {
 				ValueSource::User { ast, .. } => match dat_val.kind {
@@ -116,7 +141,7 @@ fn req_hover_symbol(ctx: &request::Context, token: SyntaxToken) -> Option<HoverC
 		contents.push(MarkedString::String(docs));
 	}
 
-	Some(HoverContents::Array(contents))
+	HoverContents::Array(contents)
 }
 
 #[must_use]
