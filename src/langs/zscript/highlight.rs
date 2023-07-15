@@ -529,11 +529,14 @@ impl<'c> Context<'c> {
 
 		let rgx = REGEX.get_or_init(|| {
 			Regex::new(
-				r"(?x)
+				r#"(?x)
 			(%[spcdiuxXofFeEgGaA])|
+			(\$\$?[A-Za-z0-9_]+)|
 			(\\c\[\w+\])|
-			(\\[nt])
-			",
+			(\\[abfnrtv?"])|
+			(\\[0-7]{3})|
+			(\\x[A-Fa-f0-9]{2})
+			"#,
 			)
 			.unwrap()
 		});
@@ -544,7 +547,14 @@ impl<'c> Context<'c> {
 		for capset in rgx.captures_iter(token.text()) {
 			let (semtoken, range) = if let Some(capture) = capset.get(1) {
 				(SemToken::FormatSpec, capture.range())
-			} else if let Some(capture) = capset.get(2).or(capset.get(3)) {
+			} else if let Some(capture) = capset.get(2) {
+				(SemToken::Constant, capture.range()) // LANGUAGE string ID
+			} else if let Some(capture) = capset
+				.get(3)
+				.or(capset.get(4))
+				.or(capset.get(5))
+				.or(capset.get(6))
+			{
 				(SemToken::EscapeSeq, capture.range())
 			} else {
 				unreachable!()
