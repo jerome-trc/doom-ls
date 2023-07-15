@@ -14,7 +14,7 @@ use crate::{
 	semtokens::{Highlighter, SemToken, SemTokenFlags},
 };
 
-use super::Datum;
+use super::{Datum, ValueKind};
 
 pub(super) struct Context<'c> {
 	upper: &'c request::Context<'c>,
@@ -546,10 +546,11 @@ impl<'c> Context<'c> {
 		let project::Datum::ZScript(dat_zs) = datum;
 		let Datum::Value(dat_val) = dat_zs else { return; };
 
-		if dat_val.mutable {
-			self.hl.advance(SemToken::Property, range);
-		} else {
-			self.hl.advance(SemToken::Constant, range);
+		match dat_val.kind {
+			ValueKind::_Local | ValueKind::Field => self.hl.advance(SemToken::Property, range),
+			ValueKind::Constant | ValueKind::EnumVariant => {
+				self.hl.advance(SemToken::Constant, range)
+			}
 		}
 	}
 

@@ -1,9 +1,23 @@
 use std::path::{Path, PathBuf};
 
-use doomfront::rowan::{TextRange, TextSize};
+use doomfront::rowan::{SyntaxText, TextRange, TextSize};
 use lsp_types::{Location, Url};
 
 use crate::{lines::LineIndex, Error};
+
+#[allow(unused)]
+pub(crate) fn append_syntaxtext(string: &mut String, text: SyntaxText) {
+	text.for_each_chunk(|chunk| {
+		string.push_str(chunk);
+	})
+}
+
+#[must_use]
+pub(crate) fn syntaxtext_to_string(text: SyntaxText) -> String {
+	let mut ret = String::with_capacity(text.len().into());
+	append_syntaxtext(&mut ret, text);
+	ret
+}
 
 pub(crate) fn uri_to_pathbuf(uri: &Url) -> Result<PathBuf, Error> {
 	if uri.scheme() != "file" {

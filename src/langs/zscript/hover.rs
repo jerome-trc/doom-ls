@@ -1,12 +1,18 @@
 //! Handling for `textDocument/hover` requests.
 
-use doomfront::zdoom::zscript::{Syn, SyntaxToken};
+use doomfront::{
+	rowan::ast::AstNode,
+	zdoom::zscript::{ast, Syn, SyntaxElem, SyntaxNode, SyntaxToken},
+};
 use lsp_server::{ErrorCode, Message, Response};
 use lsp_types::{Hover, HoverContents, HoverParams, LanguageString, MarkedString};
 
-use crate::{project, request, Core, Error, UnitResult};
+use crate::{project, request, util, Core, Error, UnitResult};
 
-use super::Datum;
+use super::{
+	ClassDatum, ClassSource, Datum, EnumDatum, EnumSource, FunctionDatum, FunctionSource,
+	MixinClassDatum, MixinClassSource, StructDatum, StructSource, ValueKind, ValueSource,
+};
 
 pub(crate) fn req_hover(ctx: request::Context, params: HoverParams) -> UnitResult {
 	let Some(parsed) = &ctx.sfile.parsed else {
@@ -79,51 +85,269 @@ fn req_hover_symbol(ctx: &request::Context, token: SyntaxToken) -> Option<HoverC
 		Datum::Primitive(dat_prim) => dat_prim.name,
 	};
 
-	let name_string = ctx
+	let (code, docs) = ctx
 		.core
 		.strings
 		.resolve_nocase(iname, |s| match dat_zs {
-			// TODO:
-			// - zscdoc support.
-			// - Symbolic constants should have types inferred and presented.
-			// - Variable values should be formatted with their type.
-			// - Function signatures.
-			Datum::Class(dat_class) => {
-				if let Some(ancestor) = dat_class.parent {
-					ctx.core
-						.strings
-						.resolve_nocase(ancestor, |s1| format!("class {s} : {s1}"))
-						.unwrap()
-				} else {
-					format!("class {s}")
-				}
-			}
-			Datum::Value(dat_val) => {
-				if dat_val.mutable {
-					s.clone().into_string()
-				} else {
-					format!("const {s}")
-				}
-			}
-			Datum::Enum(_) => format!("enum {s}"),
-			Datum::MixinClass(_) => format!("mixin class {s}"),
-			Datum::Struct(_) => format!("struct {s}"),
-			Datum::Function(_) => format!("{s}()"),
-			Datum::Primitive(_) => s.clone().into_string(),
+			Datum::Class(dat_class) => format_class_info(ctx, dat_class, s),
+			Datum::Value(dat_val) => match &dat_val.source {
+				ValueSource::User { ast, .. } => match dat_val.kind {
+					ValueKind::_Local => format_local_info(ctx, ast),
+					ValueKind::Field => format_field_info(ctx, ast),
+					ValueKind::Constant => format_constant_info(ctx, ast, s),
+					ValueKind::EnumVariant => format_enum_variant_info(ctx, ast),
+				},
+				ValueSource::Native { docs, decl } => (decl.to_string(), docs.to_string()),
+			},
+			Datum::Enum(dat_enum) => format_enum_info(ctx, dat_enum, s),
+			Datum::MixinClass(dat_mixin) => format_mixin_info(ctx, dat_mixin, s),
+			Datum::Struct(dat_struct) => format_struct_info(ctx, dat_struct, s),
+			Datum::Function(dat_fn) => format_function_info(ctx, dat_fn, s),
+			Datum::Primitive(dat_prim) => (s.clone().into_string(), dat_prim.doc.to_string()),
 		})
 		.unwrap();
 
-	Some(HoverContents::Array(vec![MarkedString::LanguageString(
-		LanguageString {
-			language: "zscript".to_string(),
-			value: name_string,
-		},
-	)]))
+	let mut contents = vec![MarkedString::LanguageString(LanguageString {
+		language: "zscript".to_string(),
+		value: code,
+	})];
+
+	if !docs.is_empty() {
+		contents.push(MarkedString::String(docs));
+	}
+
+	Some(HoverContents::Array(contents))
+}
+
+#[must_use]
+fn format_class_info(ctx: &request::Context, datum: &ClassDatum, name: &str) -> (String, String) {
+	match &datum.source {
+		ClassSource::User { ast, .. } => {
+			let mut decl = format!("class {name}");
+			let mut docs = String::new();
+
+			if let Some(ancestor) = datum.parent {
+				ctx.core
+					.strings
+					.resolve_nocase(ancestor, |s1| {
+						decl.push_str(" : ");
+						decl.push_str(s1);
+					})
+					.unwrap();
+			}
+
+			for qual in ast.qualifiers() {
+				decl.push(' ');
+
+				match qual {
+					ast::ClassQual::Replaces(clause) => {
+						util::append_syntaxtext(&mut decl, clause.syntax().text());
+					}
+					ast::ClassQual::Abstract(_) => decl.push_str("abstract"),
+					ast::ClassQual::Play(_) => decl.push_str("play"),
+					ast::ClassQual::Ui(_) => decl.push_str("ui"),
+					ast::ClassQual::Native(_) => decl.push_str("native"),
+					ast::ClassQual::Version(version) => {
+						util::append_syntaxtext(&mut decl, version.syntax().text());
+					}
+				}
+			}
+
+			for doc in ast.docs() {
+				docs.push_str(doc.text_trimmed());
+			}
+
+			(decl, docs)
+		}
+		ClassSource::Native { docs: doc, decl } => (decl.to_string(), doc.to_string()),
+	}
+}
+
+#[must_use]
+fn format_constant_info(_: &request::Context, node: &SyntaxNode, name: &str) -> (String, String) {
+	let constdef = ast::ConstDef::cast(node.clone()).unwrap();
+	let mut decl = format!("const {name}");
+	let mut docs = String::new();
+
+	if let Ok(init) = constdef.initializer() {
+		decl.push_str(" = ");
+		util::append_syntaxtext(&mut decl, init.syntax().text());
+	}
+
+	for doc in constdef.docs() {
+		docs.push_str(doc.text_trimmed());
+	}
+
+	(decl, docs)
+}
+
+#[must_use]
+fn format_enum_info(_: &request::Context, datum: &EnumDatum, name: &str) -> (String, String) {
+	match &datum.source {
+		EnumSource::User { ast, .. } => {
+			let mut docs = String::new();
+
+			for doc in ast.docs() {
+				docs.push_str(doc.text_trimmed());
+			}
+
+			(format!("enum {name} : {t}", t = datum.underlying), docs)
+		}
+		EnumSource::Native { doc, decl } => (decl.to_string(), doc.to_string()),
+	}
+}
+
+#[must_use]
+fn format_enum_variant_info(_: &request::Context, node: &SyntaxNode) -> (String, String) {
+	let variant = ast::EnumVariant::cast(node.clone()).unwrap();
+
+	let mut decl = String::new();
+	let mut docs = String::new();
+
+	decl.push_str(variant.name().text());
+
+	if let Some(init) = variant.initializer() {
+		decl.push_str(" = ");
+
+		init.syntax().text().for_each_chunk(|chunk| {
+			decl.push_str(chunk);
+		});
+	}
+
+	for doc in variant.docs() {
+		docs.push_str(doc.text_trimmed());
+	}
+
+	(decl, docs)
+}
+
+#[must_use]
+fn format_field_info(_: &request::Context, node: &SyntaxNode) -> (String, String) {
+	let field = ast::FieldDecl::cast(node.clone()).unwrap();
+
+	let mut decl = String::new();
+	let mut docs = String::new();
+
+	let elems = field.syntax().children_with_tokens().skip_while(|elem| {
+		elem.as_token()
+			.is_some_and(|token| token.kind() == Syn::DocComment || token.kind().is_trivia())
+	});
+
+	for elem in elems {
+		match elem {
+			SyntaxElem::Token(token) => {
+				decl.push_str(token.text());
+			}
+			SyntaxElem::Node(node) => {
+				util::append_syntaxtext(&mut decl, node.text());
+			}
+		}
+	}
+
+	for doc in field.docs() {
+		docs.push_str(doc.text_trimmed());
+	}
+
+	(decl, docs)
+}
+
+#[must_use]
+fn format_function_info(
+	_: &request::Context,
+	datum: &FunctionDatum,
+	name: &str,
+) -> (String, String) {
+	match &datum.source {
+		FunctionSource::User { ast, .. } => {
+			let mut decl = String::new();
+			let mut docs = String::new();
+
+			let quals = ast.qualifiers();
+			let ret_types = ast.return_types();
+			let param_list = ast.param_list().unwrap();
+
+			util::append_syntaxtext(&mut decl, quals.syntax().text());
+			util::append_syntaxtext(&mut decl, ret_types.syntax().text());
+			decl.push_str(name);
+			util::append_syntaxtext(&mut decl, param_list.syntax().text());
+
+			if datum.is_const {
+				decl.push_str(" const");
+			}
+
+			for doc in ast.docs() {
+				docs.push_str(doc.text_trimmed());
+			}
+
+			(decl, docs)
+		}
+		FunctionSource::Native { doc, signature } => (signature.to_string(), doc.to_string()),
+	}
+}
+
+#[must_use]
+fn format_local_info(_: &request::Context, node: &SyntaxNode) -> (String, String) {
+	(util::syntaxtext_to_string(node.text()), String::new())
+}
+
+#[must_use]
+fn format_mixin_info(
+	_: &request::Context,
+	datum: &MixinClassDatum,
+	name: &str,
+) -> (String, String) {
+	match &datum.source {
+		MixinClassSource::User { ast, .. } => {
+			let mut docs = String::new();
+
+			for doc in ast.docs() {
+				docs.push_str(doc.text_trimmed());
+			}
+
+			(format!("mixin class {name}"), docs)
+		}
+		MixinClassSource::Native { decl, doc } => (decl.to_string(), doc.to_string()),
+	}
+}
+
+#[must_use]
+fn format_struct_info(_: &request::Context, datum: &StructDatum, name: &str) -> (String, String) {
+	match &datum.source {
+		StructSource::User { ast, .. } => {
+			let mut decl = format!("struct {name}");
+			let mut docs = String::new();
+
+			for qual in ast.qualifiers() {
+				decl.push(' ');
+
+				match qual {
+					ast::StructQual::Play(_) => decl.push_str("play"),
+					ast::StructQual::Ui(_) => decl.push_str("ui"),
+					ast::StructQual::Native(_) => decl.push_str("native"),
+					ast::StructQual::ClearScope(_) => decl.push_str("clearscope"),
+					ast::StructQual::Version(version) => {
+						util::append_syntaxtext(&mut decl, version.syntax().text());
+					}
+				}
+			}
+
+			for doc in ast.docs() {
+				docs.push_str(doc.text_trimmed());
+			}
+
+			(decl, docs)
+		}
+		StructSource::Native { decl, doc } => (decl.to_string(), doc.to_string()),
+	}
 }
 
 #[must_use]
 fn req_hover_keyword(token: SyntaxToken) -> Option<HoverContents> {
 	let (kw, contents) = match token.kind() {
+		Syn::KwAbstract => (
+			"abstract",
+			&["A class marked `abstract` cannot be instantiated with `new`."],
+		),
 		Syn::KwClass => (
 			"class",
 			&[
@@ -138,6 +362,7 @@ fn req_hover_keyword(token: SyntaxToken) -> Option<HoverContents> {
 				and is not always — though occasionally is — a reference type, unlike classes.",
 			],
 		),
+		// TODO
 		_ => return None,
 	};
 
