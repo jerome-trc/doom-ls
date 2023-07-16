@@ -266,6 +266,7 @@ pub(crate) struct FunctionDatum {
 	pub(crate) name: IName,
 	pub(crate) source: FunctionSource,
 	pub(crate) is_const: bool,
+	pub(crate) is_static: bool,
 	pub(crate) body: Option<FunctionBody>,
 }
 
@@ -619,6 +620,10 @@ impl UpdateContext<'_> {
 				ast: fndecl.clone(),
 			},
 			is_const: fndecl.is_const(),
+			is_static: fndecl
+				.qualifiers()
+				.iter()
+				.any(|qual| matches!(qual, ast::MemberQual::Static(_))),
 			body: None,
 		};
 
@@ -954,6 +959,7 @@ pub(crate) fn native_symbols(core: &crate::Core) -> [(IName, Datum); 19] {
 						signature: "clearscope Object new(class<Object> type)",
 					},
 					is_const: false,
+					is_static: true,
 					body: None,
 				}),
 			)

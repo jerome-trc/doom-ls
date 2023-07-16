@@ -1,9 +1,41 @@
 use std::path::{Path, PathBuf};
 
-use doomfront::rowan::{SyntaxText, TextRange, TextSize};
+use doomfront::{
+	rowan::{SyntaxNode, SyntaxText, TextRange, TextSize},
+	LangExt,
+};
 use lsp_types::{Location, Url};
 
 use crate::{lines::LineIndex, Error};
+
+/// `whitespace` is used to ensure that whitespace tokens have their contents
+/// replaced with a single space character.
+pub(crate) fn append_descendant_tokens<L: LangExt>(
+	string: &mut String,
+	node: &SyntaxNode<L>,
+	whitespace: L::Kind,
+) {
+	for desc in node.descendants_with_tokens() {
+		let Some(token) = desc.into_token() else { continue; };
+
+		if token.kind() == whitespace {
+			string.push(' ');
+		} else {
+			string.push_str(token.text());
+		}
+	}
+}
+
+/// Convenience function wrapping [`append_descendant_tokens`].
+#[must_use]
+pub(crate) fn descendant_tokens_to_string<L: LangExt>(
+	node: &SyntaxNode<L>,
+	whitespace: L::Kind,
+) -> String {
+	let mut ret = String::new();
+	append_descendant_tokens(&mut ret, node, whitespace);
+	ret
+}
 
 #[allow(unused)]
 pub(crate) fn append_syntaxtext(string: &mut String, text: SyntaxText) {

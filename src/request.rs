@@ -6,7 +6,8 @@ use lsp_server::{
 	Connection, ErrorCode, ExtractError, Request, RequestId, Response, ResponseError,
 };
 use lsp_types::request::{
-	GotoDefinition, HoverRequest, References, SemanticTokensFullRequest, SemanticTokensRangeRequest,
+	DocumentSymbolRequest, GotoDefinition, HoverRequest, References, SemanticTokensFullRequest,
+	SemanticTokensRangeRequest,
 };
 
 use crate::{
@@ -103,13 +104,11 @@ pub(super) fn handle(
 			return Core::respond_null(conn, id);
 		};
 
-		let ix_project = core.project_index(project);
-
 		let ctx = Context {
 			core,
 			conn,
 			project,
-			ix_project,
+			ix_project: core.project_index(project),
 			file_id,
 			id,
 			sfile,
@@ -117,6 +116,35 @@ pub(super) fn handle(
 
 		match sfile.lang {
 			LangId::ZScript => zscript::req_semtokens_full(ctx),
+			_ => Core::respond_null(conn, ctx.id),
+		}
+	})?;
+
+	req = try_request::<DocumentSymbolRequest, _>(req, |id, params| {
+		core.semantic_update();
+
+		let path = util::uri_to_pathbuf(&params.text_document.uri)?;
+
+		let Some((project, file_id)) = core.find_project_by_path(&path) else {
+			return Core::respond_null(conn, id);
+		};
+
+		let Some(sfile) = project.get_file(file_id) else {
+			return Core::respond_null(conn, id);
+		};
+
+		let ctx = Context {
+			core,
+			conn,
+			project,
+			ix_project: core.project_index(project),
+			file_id,
+			id,
+			sfile,
+		};
+
+		match sfile.lang {
+			LangId::ZScript => zscript::req_doc_symbols(ctx),
 			_ => Core::respond_null(conn, ctx.id),
 		}
 	})?;
