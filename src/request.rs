@@ -209,14 +209,17 @@ pub(super) fn handle(
 			return Core::respond_null(conn, id);
 		};
 
-		zscript::req_references(
+		let ctx = Context {
 			core,
 			conn,
+			project,
+			ix_project: ix_p,
+			file_id,
 			id,
-			params.text_document_position.position,
-			ix_p,
 			sfile,
-		)
+		};
+
+		zscript::req_references(ctx, params.text_document_position.position)
 	})?;
 
 	ControlFlow::Continue(req)
