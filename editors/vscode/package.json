@@ -934,6 +934,16 @@
 		}
 	],
     "commands": [
+		{
+			"command": "doomls.startServer",
+			"title": "Start Language Server",
+			"category": "DoomLS"
+		},
+		{
+			"command": "doomls.stopServer",
+			"title": "Stop Language Server",
+			"category": "DoomLS"
+		}
     ],
 	"semanticTokenTypes": [
 		{

@@ -15,16 +15,25 @@ const channel = vscode.window.createOutputChannel("DoomLS Client")
 // Your extension is activated the very first time the command is executed
 export async function activate(ctx: vscode.ExtensionContext) {
 	channel.appendLine("(DoomLS) Client initializing...");
+
+	ctx.subscriptions.push(vscode.commands.registerCommand("doomls.startServer", () => {
+		startServer(ctx);
+	}));
+
+	ctx.subscriptions.push(vscode.commands.registerCommand("doomls.stopServer", () => {
+		stopServer();
+	}));
+
 	const cfg = vscode.workspace.getConfiguration("doomls");
 
 	if (!cfg.get("server.enable") || client !== null) {
 		return;
 	}
 
-	start_server(ctx);
+	startServer(ctx);
 }
 
-async function start_server(ctx: vscode.ExtensionContext) {
+async function startServer(ctx: vscode.ExtensionContext) {
 	vscode.window.showInformationMessage('(DoomLS) Server starting...');
 
 	if (client !== null) {
@@ -56,6 +65,10 @@ async function start_server(ctx: vscode.ExtensionContext) {
 }
 
 export async function deactivate() {
+	stopServer();
+}
+
+async function stopServer() {
 	channel.appendLine("(DoomLS) Client shutting down...")
 
 	if (client === null) {
@@ -64,8 +77,4 @@ export async function deactivate() {
 
 	await client.stop();
 	client = null;
-}
-
-function strNone(s: string | undefined): string | null {
-	return s === undefined || s === "none" ? null : s;
 }
