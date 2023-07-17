@@ -683,8 +683,10 @@ pub(crate) fn top_level_name(top: ast::TopLevel) -> Option<SyntaxToken> {
 
 // Native symbols //////////////////////////////////////////////////////////////
 
-#[must_use]
-pub(crate) fn native_symbols(core: &crate::Core) -> [(IName, Datum); 19] {
+include!(concat!(env!("OUT_DIR"), "/native/zscript.rs"));
+
+// TODO: Migrate remaining gzdoom.pk3 symbols out of here and into a generated file.
+pub(crate) fn builtin_symbols(core: &crate::Core) -> impl Iterator<Item = (IName, Datum)> {
 	let iname_object = core.strings.type_name_nocase("Object");
 	let iname_thinker = core.strings.type_name_nocase("Thinker");
 
@@ -913,56 +915,5 @@ pub(crate) fn native_symbols(core: &crate::Core) -> [(IName, Datum); 19] {
 				}),
 			)
 		},
-		// Constants ///////////////////////////////////////////////////////////
-		{
-			let iname = core.strings.value_name_nocase("ATTN_NONE");
-
-			(
-				iname,
-				Datum::Value(ValueDatum {
-					name: iname,
-					source: ValueSource::Native {
-						decl: "const ATTN_NONE = 0",
-						docs: "",
-					},
-					kind: ValueKind::Constant,
-				}),
-			)
-		},
-		{
-			let iname = core.strings.value_name_nocase("ATTN_NORM");
-
-			(
-				iname,
-				Datum::Value(ValueDatum {
-					name: iname,
-					source: ValueSource::Native {
-						decl: "const ATTN_NORM = 1",
-						docs: "",
-					},
-					kind: ValueKind::Constant,
-				}),
-			)
-		},
-		// Functions ///////////////////////////////////////////////////////////
-		{
-			let iname = core.strings.value_name_nocase("new");
-
-			(
-				iname,
-				Datum::Function(FunctionDatum {
-					name: iname,
-					source: FunctionSource::Native {
-						doc: "Creates an object with the specified type. \
-						Defaults to using the class of the calling object. \
-						Typically spelled lowercase like a keyword.",
-						signature: "clearscope Object new(class<Object> type)",
-					},
-					is_const: false,
-					is_static: true,
-					body: None,
-				}),
-			)
-		},
-	]
+	].into_iter()
 }

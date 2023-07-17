@@ -128,7 +128,7 @@ fn capabilities() -> ServerCapabilities {
 			},
 		)),
 		definition_provider: Some(OneOf::Left(true)),
-		document_symbol_provider: Some(OneOf::Left(true)),
+		// document_symbol_provider: Some(OneOf::Left(true)),
 		hover_provider: Some(HoverProviderCapability::Simple(true)),
 		references_provider: Some(OneOf::Left(true)),
 		semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
@@ -353,7 +353,15 @@ impl Core {
 
 				let scope = Rc::get_mut(&mut ptr).unwrap();
 
-				for (iname, dat) in langs::zscript::sema::native_symbols(self) {
+				for (iname, dat) in langs::zscript::sema::builtin_symbols(self) {
+					scope.insert(iname, project::Datum::ZScript(dat));
+				}
+
+				for (iname, dat) in langs::zscript::sema::native_global_functions(self) {
+					scope.insert(iname, project::Datum::ZScript(dat));
+				}
+
+				for (iname, dat) in langs::zscript::sema::native_global_values(self) {
 					scope.insert(iname, project::Datum::ZScript(dat));
 				}
 
