@@ -532,10 +532,8 @@ impl<'c> Context<'c> {
 				r#"(?x)
 			(%[spcdiuxXofFeEgGaA])|
 			(\$\$?[A-Za-z0-9_]+)|
-			(\\c\[\w+\])|
-			(\\[abfnrtv?"])|
-			(\\[0-7]{3})|
-			(\\x[A-Fa-f0-9]{2})
+			(\\c(?:\[\w+\]|-))|
+			(\\[abfnrtv?"]|\\[0-7]{3}|\\x[A-Fa-f0-9]{2})
 			"#,
 			)
 			.unwrap()
@@ -549,12 +547,7 @@ impl<'c> Context<'c> {
 				(SemToken::FormatSpec, capture.range())
 			} else if let Some(capture) = capset.get(2) {
 				(SemToken::Constant, capture.range()) // LANGUAGE string ID
-			} else if let Some(capture) = capset
-				.get(3)
-				.or(capset.get(4))
-				.or(capset.get(5))
-				.or(capset.get(6))
-			{
+			} else if let Some(capture) = capset.get(3).or(capset.get(4)) {
 				(SemToken::EscapeSeq, capture.range())
 			} else {
 				unreachable!()
