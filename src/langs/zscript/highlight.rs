@@ -360,6 +360,7 @@ impl<'c> Context<'c> {
 				| Syn::KwForEach
 				| Syn::KwFor
 				| Syn::KwGoto
+				| Syn::KwInclude
 				| Syn::KwIf
 				| Syn::KwLoop
 				| Syn::KwReturn
@@ -514,7 +515,7 @@ impl<'c> Context<'c> {
 				);
 			}
 			Syn::NullLit => self.hl.advance(SemToken::Keyword, range),
-			Syn::PoundInclude | Syn::RegionStart | Syn::RegionEnd => {
+			Syn::RegionStart | Syn::RegionEnd => {
 				self.hl
 					.advance_mod(SemToken::Keyword, range, SemTokenFlags::CONTROL_FLOW)
 			}
