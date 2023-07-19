@@ -14,7 +14,11 @@ pub(crate) fn req_doc_symbols(ctx: request::Context) -> UnitResult {
 	let cursor = SyntaxNode::new_root(parsed.green.clone());
 
 	for child in cursor.children() {
-		match ast::TopLevel::cast(child).unwrap() {
+		let Some(toplevel) = ast::TopLevel::cast(child) else {
+			continue;
+		};
+
+		match toplevel {
 			ast::TopLevel::ClassDef(classdef) => {
 				if let Some(docsym) = doc_symbol_class(&ctx, classdef) {
 					docsyms.push(docsym);
@@ -255,10 +259,10 @@ fn doc_symbol_const(ctx: &request::Context, constdef: ast::ConstDef) -> Option<D
 	#[allow(deprecated)]
 	let ret = DocumentSymbol {
 		name: name.text().to_string(),
-		detail: Some(util::descendant_tokens_to_string(
-			constdef.initializer().unwrap().syntax(),
-			Syn::Whitespace,
-		)),
+		detail: constdef
+			.initializer()
+			.ok()
+			.map(|init| util::descendant_tokens_to_string(init.syntax(), Syn::Whitespace)),
 		kind: SymbolKind::CONSTANT,
 		tags: None,
 		deprecated: None,
