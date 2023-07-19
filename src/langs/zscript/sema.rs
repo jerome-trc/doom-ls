@@ -266,6 +266,7 @@ pub(crate) struct FunctionDatum {
 	pub(crate) name: IName,
 	pub(crate) source: FunctionSource,
 	pub(crate) is_const: bool,
+	#[allow(unused)]
 	pub(crate) is_static: bool,
 	pub(crate) body: Option<FunctionBody>,
 }
