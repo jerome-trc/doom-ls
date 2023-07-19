@@ -122,7 +122,7 @@ fn symbol_hover(ctx: &request::Context, datum: &Datum) -> HoverContents {
 					ValueKind::Constant => format_constant_info(ctx, ast, s),
 					ValueKind::EnumVariant => format_enum_variant_info(ctx, ast),
 				},
-				ValueSource::Native { docs, decl } => (decl.to_string(), docs.to_string()),
+				ValueSource::Native { doc: docs, decl } => (decl.to_string(), docs.to_string()),
 			},
 			Datum::Enum(dat_enum) => format_enum_info(ctx, dat_enum, s),
 			Datum::MixinClass(dat_mixin) => format_mixin_info(ctx, dat_mixin, s),
@@ -184,7 +184,7 @@ fn format_class_info(ctx: &request::Context, datum: &ClassDatum, name: &str) -> 
 
 			(decl, docs)
 		}
-		ClassSource::Native { docs: doc, decl } => (decl.to_string(), doc.to_string()),
+		ClassSource::Native { doc, decl } => (decl.to_string(), doc.to_string()),
 	}
 }
 

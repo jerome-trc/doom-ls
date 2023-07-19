@@ -351,19 +351,14 @@ impl Core {
 					return ptr.clone();
 				}
 
+				let start_time = std::time::Instant::now();
 				let scope = Rc::get_mut(&mut ptr).unwrap();
+				langs::zscript::native::register(self, scope);
 
-				for (iname, dat) in langs::zscript::sema::builtin_symbols(self) {
-					scope.insert(iname, project::Datum::ZScript(dat));
-				}
-
-				for (iname, dat) in langs::zscript::sema::native_global_functions(self) {
-					scope.insert(iname, project::Datum::ZScript(dat));
-				}
-
-				for (iname, dat) in langs::zscript::sema::native_global_values(self) {
-					scope.insert(iname, project::Datum::ZScript(dat));
-				}
+				tracing::debug!(
+					"Native symbol scope initialized in {}ms.",
+					start_time.elapsed().as_millis()
+				);
 
 				ptr.clone()
 			}),

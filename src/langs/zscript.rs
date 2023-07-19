@@ -6,6 +6,7 @@ mod docsymbols;
 mod goto;
 pub(crate) mod highlight;
 mod hover;
+pub(crate) mod native;
 pub(crate) mod sema;
 
 use std::{
