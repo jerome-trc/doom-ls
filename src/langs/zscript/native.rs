@@ -75,7 +75,7 @@ struct RawNativeValue {
 const BUILTINS: &[RawNativePrimitive] = &[
 	// Integrals ///////////////////////////////////////////////////////////////
 	RawNativePrimitive {
-		name: "boolean",
+		name: "bool",
 		doc: indoc::indoc! {
 			"A strongly-typed \"truthy\" value, which can only hold a constant
 			`true` or `false`."
