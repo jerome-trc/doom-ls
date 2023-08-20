@@ -7,10 +7,10 @@ use doomfront::{
 		zscript::{ast, Syn, SyntaxElem, SyntaxNode, SyntaxToken},
 	},
 };
-use lsp_server::{ErrorCode, Message, Response};
+use lsp_server::{Message, Response};
 use lsp_types::{Hover, HoverContents, HoverParams, LanguageString, MarkedString};
 
-use crate::{project, request, util, Core, Error, UnitResult};
+use crate::{project, request, util, Core, UnitResult};
 
 use super::{
 	ClassDatum, ClassSource, Datum, EnumDatum, EnumSource, FunctionDatum, FunctionSource,
@@ -25,10 +25,8 @@ pub(crate) fn req_hover(ctx: request::Context, params: HoverParams) -> UnitResul
 	let pos = params.text_document_position_params.position;
 
 	let Some(token) = parsed.token_at::<Syn>(pos, &ctx.sfile.lndx) else {
-		return Err(Error::Process {
-			source: None,
-			ctx: format!("invalid position {pos:#?}"),
-		}.map_to_response(ctx.id, ErrorCode::InvalidParams));
+		// Hovered over position 0 in a totally empty file.
+		return Core::respond_null(ctx.conn, ctx.id);
 	};
 
 	let contents = if token.kind() == Syn::Ident {
