@@ -5,8 +5,9 @@ use std::ops::ControlFlow;
 use lsp_server::{Connection, ExtractError, Message, Notification};
 use lsp_types::{
 	notification::{
-		DidChangeConfiguration, DidChangeTextDocument, DidChangeWatchedFiles, DidOpenTextDocument,
-		DidSaveTextDocument, PublishDiagnostics,
+		DidChangeConfiguration, DidChangeTextDocument, DidChangeWatchedFiles, DidCreateFiles,
+		DidDeleteFiles, DidOpenTextDocument, DidRenameFiles, DidSaveTextDocument,
+		PublishDiagnostics,
 	},
 	Diagnostic, DiagnosticSeverity, FileChangeType, Position, PublishDiagnosticsParams, Url,
 };
@@ -114,7 +115,7 @@ pub(super) fn handle(
 						continue;
 					};
 
-					project.on_file_delete(path);
+					project.remove_file(path);
 				}
 				_ => unreachable!(),
 			}
@@ -154,23 +155,32 @@ pub(super) fn handle(
 		let path = util::uri_to_pathbuf(&params.text_document.uri)?;
 
 		let Some((project, file_id)) = core.find_project_by_path(&path) else {
-			if core.find_project_by_child(&path).is_some() {
-				match params.text_document.language_id.as_str() {
-					"zscript" => {
-						conn.sender.send(Message::Notification(
-							unincluded_diag_notif(params.text_document.uri, "ZScript")
-						))?;
-					}
-					"decorate" => {
-						conn.sender.send(Message::Notification(
-							unincluded_diag_notif(params.text_document.uri, "DECORATE")
-						))?;
-					},
-					_ => {}
+			let Some(project) = core.find_project_by_child_mut(&path) else {
+				// The user opened a file entirely outside the load order.
+				// Nothing to do here.
+				return Ok(());
+			};
+
+			match params.text_document.language_id.as_str() {
+				"zscript" => {
+					// Intern the path so include tree re-building can find it later.
+					let _ = project.paths_mut().get_or_intern_nocase(&path);
+
+					conn.sender.send(Message::Notification(
+						unincluded_diag_notif(params.text_document.uri, "ZScript")
+					))?;
 				}
+				"decorate" => {
+					// Intern the path so include tree re-building can find it later.
+					let _ = project.paths_mut().get_or_intern_nocase(&path);
+
+					conn.sender.send(Message::Notification(
+						unincluded_diag_notif(params.text_document.uri, "DECORATE")
+					))?;
+				},
+				_ => {}
 			}
 
-			// The user opened a file outside the load order. Nothing to do here.
 			return Ok(());
 		};
 
@@ -196,14 +206,62 @@ pub(super) fn handle(
 		Ok(())
 	})?;
 
+	notif = try_notif::<DidCreateFiles, _>(notif, |params| {
+		for created in params.files {
+			let path = util::parse_uri(&created.uri)?;
+
+			let Some((project, _)) = core.find_project_by_path_mut(&path) else {
+				continue;
+			};
+
+			let file_id = project.paths_mut().get_or_intern_native(&path);
+			let text = std::fs::read_to_string(&path).map_err(Error::from)?;
+			project.add_file(file_id, text);
+		}
+
+		Ok(())
+	})?;
+
+	notif = try_notif::<DidRenameFiles, _>(notif, |params| {
+		for rename in params.files {
+			let old_path = util::parse_uri(&rename.old_uri)?;
+			let new_path = util::parse_uri(&rename.new_uri)?;
+
+			let Some((project, _)) = core.find_project_by_path_mut(&old_path) else {
+				continue;
+			};
+
+			project.remove_file(old_path);
+			let file_id = project.paths_mut().get_or_intern_native(&new_path);
+			let text = std::fs::read_to_string(&new_path).map_err(Error::from)?;
+			project.add_file(file_id, text);
+		}
+
+		Ok(())
+	})?;
+
+	notif = try_notif::<DidDeleteFiles, _>(notif, |params| {
+		for deletion in params.files {
+			let path = util::parse_uri(&deletion.uri)?;
+
+			let Some((project, _)) = core.find_project_by_path_mut(&path) else {
+				continue;
+			};
+
+			project.remove_file(path);
+		}
+
+		Ok(())
+	})?;
+
 	ControlFlow::Continue(notif)
 }
 
-/// When the user opens a file which is
-/// - a child of one of the projects
-/// - having ZScript or DECORATE content
-/// - not a part of that project's ZScript or DECORATE include tree
-/// Send a diagnostic to tell them that DoomLS will have no functionality to offer.
+/// When the user opens a file which
+/// - is a child of one of the projects
+/// - has ZScript or DECORATE content
+/// - is not a part of that project's ZScript or DECORATE include tree
+/// send a diagnostic to tell them that DoomLS will have no functionality to offer.
 #[must_use]
 fn unincluded_diag_notif(uri: Url, lang_name: &'static str) -> Notification {
 	let diag = Diagnostic {

@@ -114,16 +114,45 @@ impl Project {
 		self.dirty.insert(file_id);
 	}
 
-	pub(crate) fn on_file_delete(&mut self, path: PathBuf) {
-		if let Some(file_id) = self.get_fileid(&path) {
-			self.files.remove(&file_id);
-			self.dirty.remove(&file_id);
+	pub(crate) fn add_file(&mut self, file_id: FileId, text: String) {
+		let lndx = LineIndex::new(&text);
+
+		self.set_file(file_id, SourceFile {
+			lang: LangId::Unknown,
+			text,
+			lndx,
+			parsed: None,
+		});
+	}
+
+	pub(crate) fn remove_file(&mut self, path: PathBuf) {
+		let Some(file_id) = self.get_fileid(&path) else {
+			return;
+		};
+
+		self.dirty.remove(&file_id);
+		self.files.remove(&file_id);
+
+		let Some(sfile) = self.get_file(file_id) else {
+			return;
+		};
+
+		let Some(parsed) = &sfile.parsed else {
+			return;
+		};
+
+		let symbols = Rc::as_ptr(&self.symbols).cast_mut();
+
+		for iname in &parsed.symbols {
+			unsafe {
+				(*symbols).remove(&iname);
+			}
 		}
 	}
 
 	pub(crate) fn update_global_symbols(&mut self, strings: &StringInterner) {
 		let all_dirty = self.dirty.drain().collect::<Vec<_>>();
-		let symbols = Rc::get_mut(&mut self.symbols).unwrap() as *mut Scope;
+		let symbols = Rc::as_ptr(&self.symbols).cast_mut();
 
 		for file_id in all_dirty {
 			let sfile = self.get_file_mut(file_id).unwrap();

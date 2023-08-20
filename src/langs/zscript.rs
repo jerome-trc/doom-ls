@@ -307,6 +307,8 @@ pub(crate) fn rebuild_include_tree(
 	project: &mut Project,
 	zs_root: PathBuf,
 ) -> std::io::Result<Vec<Diagnostic>> {
+	tracing::debug!("(Re)building ZScript include tree...");
+
 	#[derive(Debug, Clone, Copy)]
 	struct Context<'p> {
 		paths: &'p PathInterner,

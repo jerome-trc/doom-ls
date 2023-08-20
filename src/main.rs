@@ -313,6 +313,7 @@ impl Core {
 	}
 
 	#[must_use]
+	#[allow(unused)]
 	fn find_project_by_child(&self, path: &Path) -> Option<&Project> {
 		self.projects
 			.iter()
