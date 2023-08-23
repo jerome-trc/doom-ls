@@ -52,11 +52,9 @@ pub(crate) fn syntaxtext_to_string(text: SyntaxText) -> String {
 }
 
 pub(crate) fn parse_uri(string: &str) -> Result<PathBuf, Error> {
-	let uri = Url::parse(string).map_err(|err| {
-		Error::Process {
-			source: Some(Box::new(err)),
-			ctx: "parsing URI".to_string(),
-		}
+	let uri = Url::parse(string).map_err(|err| Error::Process {
+		source: Some(Box::new(err)),
+		ctx: "parsing URI".to_string(),
 	})?;
 
 	uri_to_pathbuf(&uri)

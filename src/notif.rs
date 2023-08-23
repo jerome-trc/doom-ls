@@ -107,6 +107,7 @@ pub(super) fn handle(
 							text,
 							lndx,
 							parsed: None,
+							nameres_valid: false,
 						},
 					);
 				}

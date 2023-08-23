@@ -11,8 +11,7 @@ use regex::Regex;
 
 use crate::{
 	lines::LineIndex,
-	names::IName,
-	project::{self, StackedScope},
+	project::{self, ScopeStack, StackedScope},
 	request,
 	semtokens::{Highlighter, SemToken, SemTokenFlags},
 };
@@ -22,7 +21,7 @@ use super::{Datum, ValueKind};
 pub(super) struct Context<'c> {
 	upper: &'c request::Context<'c>,
 	hl: Highlighter<'c>,
-	scopes: Vec<StackedScope>,
+	scopes: ScopeStack,
 }
 
 impl<'c> Context<'c> {
@@ -76,24 +75,24 @@ impl<'c> Context<'c> {
 				let classdef = ast::ClassDef::cast(node).unwrap();
 				let Ok(class_name) = classdef.name() else { return; };
 				let iname = self.upper.core.strings.type_name_nocase(class_name.text());
-				let Some(datum) = self.lookup(iname) else { return; };
-				let project::Datum::ZScript(dat_zs) = datum;
+				let Some(datum) = self.scopes.lookup(iname).cloned() else { return; };
+				let project::Datum::ZScript(dat_zs) = datum.as_ref();
 				let Datum::Class(dat_class) = dat_zs else { return; };
 				let parent = dat_class.parent;
 
 				self.scopes.push(StackedScope {
-					ix_project: Some(self.upper.ix_project),
+					project_ix: Some(self.upper.project_ix),
 					inner: dat_class.scope.clone(),
 					is_addendum: false,
 				});
 
 				if let Some(p) = parent {
-					let Some(datum) = self.lookup(p) else { return; };
-					let project::Datum::ZScript(dat_zs) = datum;
+					let Some(datum) = self.scopes.lookup(p).cloned() else { return; };
+					let project::Datum::ZScript(dat_zs) = datum.as_ref();
 					let Datum::Class(dat_class) = dat_zs else { return; };
 
 					self.scopes.push(StackedScope {
-						ix_project: Some(self.upper.ix_project),
+						project_ix: Some(self.upper.project_ix),
 						inner: dat_class.scope.clone(),
 						is_addendum: true,
 					});
@@ -103,12 +102,12 @@ impl<'c> Context<'c> {
 				let structdef = ast::StructDef::cast(node).unwrap();
 				let Ok(struct_name) = structdef.name() else { return; };
 				let iname = self.upper.core.strings.type_name_nocase(struct_name.text());
-				let Some(datum) = self.lookup(iname) else { return; };
-				let project::Datum::ZScript(dat_zs) = datum;
+				let Some(datum) = self.scopes.lookup(iname).cloned() else { return; };
+				let project::Datum::ZScript(dat_zs) = datum.as_ref();
 				let Datum::Struct(dat_struct) = dat_zs else { return; };
 
 				self.scopes.push(StackedScope {
-					ix_project: Some(self.upper.ix_project),
+					project_ix: Some(self.upper.project_ix),
 					inner: dat_struct.scope.clone(),
 					is_addendum: false,
 				});
@@ -120,11 +119,7 @@ impl<'c> Context<'c> {
 
 	fn on_leave_node(&mut self, node: SyntaxNode) {
 		if matches!(node.kind(), Syn::ClassDef | Syn::StructDef) {
-			while self.scopes.last().is_some_and(|s| s.is_addendum) {
-				let _ = self.scopes.pop().unwrap();
-			}
-
-			self.scopes.pop().unwrap();
+			self.scopes.pop_with_addenda();
 		}
 	}
 
@@ -584,8 +579,8 @@ impl<'c> Context<'c> {
 		let iname = self.upper.core.strings.type_name_nocase(token.text());
 		let range = token.text_range();
 
-		let Some(datum) = self.lookup(iname) else { return; };
-		let project::Datum::ZScript(dat_zs) = datum;
+		let Some(datum) = self.scopes.lookup(iname) else { return; };
+		let project::Datum::ZScript(dat_zs) = datum.as_ref();
 
 		match dat_zs {
 			Datum::Class(_) => self.hl.advance(SemToken::Class, range),
@@ -601,8 +596,8 @@ impl<'c> Context<'c> {
 		let range = token.text_range();
 		let iname = self.upper.core.strings.value_name_nocase(token.text());
 
-		let Some(datum) = self.lookup(iname) else { return; };
-		let project::Datum::ZScript(dat_zs) = datum;
+		let Some(datum) = self.scopes.lookup(iname) else { return; };
+		let project::Datum::ZScript(dat_zs) = datum.as_ref();
 		let Datum::Value(dat_val) = dat_zs else { return; };
 
 		match dat_val.kind {
@@ -611,12 +606,5 @@ impl<'c> Context<'c> {
 				self.hl.advance(SemToken::Constant, range)
 			}
 		}
-	}
-
-	fn lookup(&self, iname: IName) -> Option<&project::Datum> {
-		self.scopes
-			.iter()
-			.rev()
-			.find_map(|scope| scope.inner.get(&iname))
 	}
 }

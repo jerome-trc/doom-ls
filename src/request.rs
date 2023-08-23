@@ -20,7 +20,7 @@ pub(super) struct Context<'c> {
 	pub(super) core: &'c Core,
 	pub(super) conn: &'c Connection,
 	pub(super) project: &'c Project,
-	pub(super) ix_project: usize,
+	pub(super) project_ix: usize,
 	#[allow(unused)]
 	pub(super) file_id: FileId,
 	pub(super) sfile: &'c SourceFile,
@@ -33,24 +33,25 @@ pub(super) fn handle(
 	mut req: Request,
 ) -> ControlFlow<UnitResult, Request> {
 	req = try_request::<SemanticTokensRangeRequest, _>(req, |id, params| {
-		core.semantic_update();
+		core.workspace_semantic_update();
+
 		let path = util::uri_to_pathbuf(&params.text_document.uri)?;
 
-		let Some((project, file_id)) = core.find_project_by_path(&path) else {
+		let Some((project_ix, file_id)) = core.project_ix_by_path(&path) else {
 			return Core::respond_null(conn, id);
 		};
 
-		let Some(sfile) = project.get_file(file_id) else {
+		core.file_semantic_update(project_ix, file_id);
+
+		let Some(sfile) = core.projects[project_ix].get_file(file_id) else {
 			return Core::respond_null(conn, id);
 		};
-
-		let ix_project = core.project_index(project);
 
 		let ctx = Context {
 			core,
 			conn,
-			project,
-			ix_project,
+			project: &core.projects[project_ix],
+			project_ix,
 			file_id,
 			sfile,
 			id,
@@ -63,7 +64,7 @@ pub(super) fn handle(
 	})?;
 
 	req = try_request::<HoverRequest, _>(req, |id, params| {
-		core.semantic_update();
+		core.workspace_semantic_update();
 		let path = util::uri_to_pathbuf(&params.text_document_position_params.text_document.uri)?;
 
 		let Some((project, file_id)) = core.find_project_by_path(&path) else {
@@ -80,7 +81,7 @@ pub(super) fn handle(
 			core,
 			conn,
 			project,
-			ix_project,
+			project_ix: ix_project,
 			file_id,
 			sfile,
 			id,
@@ -93,7 +94,7 @@ pub(super) fn handle(
 	})?;
 
 	req = try_request::<SemanticTokensFullRequest, _>(req, |id, params| {
-		core.semantic_update();
+		core.workspace_semantic_update();
 		let path = util::uri_to_pathbuf(&params.text_document.uri)?;
 
 		let Some((project, file_id)) = core.find_project_by_path(&path) else {
@@ -108,7 +109,7 @@ pub(super) fn handle(
 			core,
 			conn,
 			project,
-			ix_project: core.project_index(project),
+			project_ix: core.project_index(project),
 			file_id,
 			id,
 			sfile,
@@ -121,7 +122,7 @@ pub(super) fn handle(
 	})?;
 
 	req = try_request::<DocumentSymbolRequest, _>(req, |id, params| {
-		core.semantic_update();
+		core.workspace_semantic_update();
 
 		let path = util::uri_to_pathbuf(&params.text_document.uri)?;
 
@@ -137,7 +138,7 @@ pub(super) fn handle(
 			core,
 			conn,
 			project,
-			ix_project: core.project_index(project),
+			project_ix: core.project_index(project),
 			file_id,
 			id,
 			sfile,
@@ -151,15 +152,16 @@ pub(super) fn handle(
 
 	req = try_request::<GotoDefinition, _>(req, |id, params| {
 		let start_time = std::time::Instant::now();
-		core.semantic_update();
+		core.workspace_semantic_update();
 		let path = util::uri_to_pathbuf(&params.text_document_position_params.text_document.uri)?;
 
-		let Some((project, ix_p, file_id)) = core.projects.iter().enumerate().find_map(|(i, p)| {
-			p.get_fileid(&path).map(|file_id| (p, i, file_id))
-		}) else {
+		let Some((project_ix, file_id)) = core.project_ix_by_path(&path) else {
 			tracing::debug!("GotoDefinition miss - file not in load order.");
 			return Core::respond_null(conn, id);
 		};
+
+		core.file_semantic_update(project_ix, file_id);
+		let project = &core.projects[project_ix];
 
 		let Some(sfile) = project.get_file(file_id) else {
 			tracing::debug!("GotoDefinition miss - file not loaded.");
@@ -175,7 +177,7 @@ pub(super) fn handle(
 			core,
 			conn,
 			project,
-			ix_project: ix_p,
+			project_ix,
 			file_id,
 			sfile,
 			id,
@@ -192,7 +194,7 @@ pub(super) fn handle(
 	})?;
 
 	req = try_request::<References, _>(req, |id, params| {
-		core.semantic_update();
+		core.workspace_semantic_update();
 		let path = util::uri_to_pathbuf(&params.text_document_position.text_document.uri)?;
 
 		let Some((project, ix_p, file_id)) = core.projects.iter().enumerate().find_map(|(i, p)| {
@@ -213,7 +215,7 @@ pub(super) fn handle(
 			core,
 			conn,
 			project,
-			ix_project: ix_p,
+			project_ix: ix_p,
 			file_id,
 			id,
 			sfile,

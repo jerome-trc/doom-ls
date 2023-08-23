@@ -39,7 +39,7 @@ use lsp_types::{
 };
 use names::StringInterner;
 use paths::FileId;
-use project::Project;
+use project::{Project, ScopeStack};
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::Serialize;
 use tracing::{debug, error, info};
@@ -285,17 +285,59 @@ impl Core {
 		}
 	}
 
-	fn semantic_update(&mut self) {
+	fn workspace_semantic_update(&mut self) {
 		let start_time = std::time::Instant::now();
+		let mut any_dirty = false;
 
 		for project in &mut self.projects {
-			project.update_global_symbols(&self.strings);
+			any_dirty |= project.update_global_symbols(&self.strings);
+		}
+
+		if any_dirty {
+			for project in &mut self.projects {
+				project.invalidate_resolved_names();
+			}
 		}
 
 		tracing::debug!(
 			"Server-wide semantic update done in {}ms.",
 			start_time.elapsed().as_millis()
 		);
+	}
+
+	/// Before fulfilling a request made in a file, it needs names referenced in
+	/// it to be re-resolved since they may have been invalidated by changes to
+	/// other files.
+	fn file_semantic_update(&mut self, project_ix: usize, file_id: FileId) {
+		let scopes = self.scope_stack();
+
+		let Some(sfile) = self.projects[project_ix].get_file_mut(file_id) else {
+			return;
+		};
+
+		if sfile.nameres_valid {
+			return;
+		}
+
+		sfile.nameres_valid = true;
+
+		let Some(parsed) = sfile.parsed.as_mut() else {
+			return;
+		};
+
+		match sfile.lang {
+			LangId::ZScript => {
+				let mut ctx = zscript::sema::NameResContext {
+					project_ix,
+					strings: &self.strings,
+					scopes,
+					parsed,
+				};
+
+				ctx.resolve_names();
+			}
+			LangId::Unknown => {}
+		}
 	}
 
 	#[must_use]
@@ -310,6 +352,14 @@ impl Core {
 		self.projects
 			.iter_mut()
 			.find_map(|project| project.get_fileid(path).map(|id| (project, id)))
+	}
+
+	#[must_use]
+	fn project_ix_by_path(&self, path: &Path) -> Option<(usize, FileId)> {
+		self.projects
+			.iter()
+			.enumerate()
+			.find_map(|(i, project)| project.get_fileid(path).map(|id| (i, id)))
 	}
 
 	#[must_use]
@@ -336,15 +386,15 @@ impl Core {
 	}
 
 	#[must_use]
-	fn scope_stack(&self) -> Vec<StackedScope> {
+	fn scope_stack(&self) -> ScopeStack {
 		thread_local! {
 			static NATIVE_SYMBOLS: RefCell<Rc<Scope>> = Default::default();
 		}
 
-		let mut ret = vec![];
+		let mut ret = ScopeStack::default();
 
 		ret.push(StackedScope {
-			ix_project: None,
+			project_ix: None,
 			inner: NATIVE_SYMBOLS.with(|n| {
 				let mut ptr = n.borrow_mut();
 
@@ -368,7 +418,7 @@ impl Core {
 
 		for (i, project) in self.projects.iter().enumerate() {
 			ret.push(StackedScope {
-				ix_project: Some(i),
+				project_ix: Some(i),
 				inner: project.scope().clone(),
 				is_addendum: false,
 			});

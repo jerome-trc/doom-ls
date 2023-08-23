@@ -15,7 +15,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::{
 	names::{IName, StringInterner},
 	paths::FileId,
-	project::{self, DatumPos, Project, Scope, StackedScope},
+	project::{self, DatumPos, ParsedFile, Project, Scope, ScopeStack, StackedScope},
 };
 
 #[derive(Debug)]
@@ -43,11 +43,13 @@ impl Datum {
 		}
 	}
 
-	pub(crate) fn add_scopes_containing(&self, scopes: &mut Vec<StackedScope>, range: TextRange) {
+	pub(crate) fn add_scopes_containing(&self, scopes: &mut ScopeStack, range: TextRange) {
 		match self {
 			Self::Class(dat_class) => {
+				let project_ix = scopes.last().unwrap().project_ix;
+
 				scopes.push(StackedScope {
-					ix_project: scopes.last().unwrap().ix_project,
+					project_ix,
 					inner: dat_class.scope.clone(),
 					is_addendum: false,
 				});
@@ -61,8 +63,10 @@ impl Datum {
 				}
 			}
 			Self::Struct(dat_struct) => {
+				let project_ix = scopes.last().unwrap().project_ix;
+
 				scopes.push(StackedScope {
-					ix_project: scopes.last().unwrap().ix_project,
+					project_ix,
 					inner: dat_struct.scope.clone(),
 					is_addendum: false,
 				});
@@ -309,7 +313,7 @@ pub(crate) struct PrimitiveDatum {
 }
 
 impl FunctionDatum {
-	pub(crate) fn add_scopes_containing(&self, scopes: &mut Vec<StackedScope>, range: TextRange) {
+	pub(crate) fn add_scopes_containing(&self, scopes: &mut ScopeStack, range: TextRange) {
 		let Some(body) = &self.body else { return; };
 
 		let Some(i) = body.block_map.iter().find_map(|kvp| {
@@ -332,9 +336,9 @@ impl FunctionDatum {
 }
 
 #[derive(Debug)]
-pub(crate) struct UpdateContext<'a> {
-	pub(crate) strings: &'a StringInterner,
-	pub(crate) project: &'a mut Project,
+pub(crate) struct UpdateContext<'c> {
+	pub(crate) strings: &'c StringInterner,
+	pub(crate) project: &'c mut Project,
 	pub(crate) file_id: FileId,
 	pub(crate) contributed: Vec<IName>,
 }
@@ -380,7 +384,7 @@ impl UpdateContext<'_> {
 					self.register_enum_variants(&mut datum, enumdef, None);
 					self.project
 						.globals_mut()
-						.insert(iname, project::Datum::ZScript(Datum::Enum(datum)));
+						.insert(iname, Rc::new(project::Datum::ZScript(Datum::Enum(datum))));
 
 					self.contributed.push(iname);
 				}
@@ -403,7 +407,7 @@ impl UpdateContext<'_> {
 
 					self.project
 						.globals_mut()
-						.insert(iname, project::Datum::ZScript(datum));
+						.insert(iname, Rc::new(project::Datum::ZScript(datum)));
 
 					self.contributed.push(iname);
 				}
@@ -426,7 +430,7 @@ impl UpdateContext<'_> {
 
 					self.project
 						.globals_mut()
-						.insert(iname, project::Datum::ZScript(datum));
+						.insert(iname, Rc::new(project::Datum::ZScript(datum)));
 
 					self.contributed.push(iname);
 				}
@@ -470,7 +474,7 @@ impl UpdateContext<'_> {
 
 					scope.insert(
 						iname,
-						project::Datum::ZScript(Datum::Value(ValueDatum {
+						Rc::new(project::Datum::ZScript(Datum::Value(ValueDatum {
 							name: iname,
 							source: ValueSource::User {
 								position: DatumPos {
@@ -481,7 +485,7 @@ impl UpdateContext<'_> {
 								ast: constdef.syntax().clone(),
 							},
 							kind: ValueKind::Constant,
-						})),
+						}))),
 					);
 				}
 				ast::ClassInnard::Enum(enumdef) => {
@@ -507,7 +511,10 @@ impl UpdateContext<'_> {
 
 					self.register_enum_variants(&mut dat_enum, enumdef, Some(&mut scope));
 
-					scope.insert(iname, project::Datum::ZScript(Datum::Enum(dat_enum)));
+					scope.insert(
+						iname,
+						Rc::new(project::Datum::ZScript(Datum::Enum(dat_enum))),
+					);
 				}
 				ast::ClassInnard::Function(fndecl) => {
 					self.register_function_decl(fndecl, &mut scope);
@@ -519,7 +526,7 @@ impl UpdateContext<'_> {
 
 						scope.insert(
 							iname,
-							project::Datum::ZScript(Datum::Value(ValueDatum {
+							Rc::new(project::Datum::ZScript(Datum::Value(ValueDatum {
 								name: iname,
 								source: ValueSource::User {
 									position: DatumPos {
@@ -530,7 +537,7 @@ impl UpdateContext<'_> {
 									ast: field.syntax().clone(),
 								},
 								kind: ValueKind::Field,
-							})),
+							}))),
 						);
 					}
 				}
@@ -542,7 +549,7 @@ impl UpdateContext<'_> {
 
 		self.project
 			.globals_mut()
-			.insert(iname, project::Datum::ZScript(Datum::Class(datum)));
+			.insert(iname, Rc::new(project::Datum::ZScript(Datum::Class(datum))));
 
 		self.contributed.push(iname);
 	}
@@ -566,7 +573,7 @@ impl UpdateContext<'_> {
 
 		self.project
 			.globals_mut()
-			.insert(iname, project::Datum::ZScript(datum));
+			.insert(iname, Rc::new(project::Datum::ZScript(datum)));
 
 		self.contributed.push(iname);
 	}
@@ -584,7 +591,7 @@ impl UpdateContext<'_> {
 			if let Some(scope) = parent_scope.as_mut() {
 				scope.insert(
 					iname,
-					project::Datum::ZScript(Datum::Value(ValueDatum {
+					Rc::new(project::Datum::ZScript(Datum::Value(ValueDatum {
 						name: iname,
 						source: ValueSource::User {
 							position: DatumPos {
@@ -595,7 +602,7 @@ impl UpdateContext<'_> {
 							ast: variant.syntax().clone(),
 						},
 						kind: ValueKind::EnumVariant,
-					})),
+					}))),
 				);
 			}
 		}
@@ -642,7 +649,175 @@ impl UpdateContext<'_> {
 		}
 
 		dat_fn.body = Some(body);
-		scope.insert(iname, project::Datum::ZScript(Datum::Function(dat_fn)));
+		scope.insert(
+			iname,
+			Rc::new(project::Datum::ZScript(Datum::Function(dat_fn))),
+		);
+	}
+}
+
+// Name resolution /////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+pub(crate) struct NameResContext<'c> {
+	pub(crate) project_ix: usize,
+	pub(crate) strings: &'c StringInterner,
+	pub(crate) scopes: ScopeStack,
+	pub(crate) parsed: &'c mut ParsedFile,
+}
+
+impl NameResContext<'_> {
+	pub(crate) fn resolve_names(&mut self) {
+		self.parsed.resolved.clear();
+		let cursor = SyntaxNode::new_root(self.parsed.green.clone());
+
+		for child in cursor.children() {
+			let Some(top) = ast::TopLevel::cast(child) else { continue; };
+
+			match top {
+				ast::TopLevel::ClassDef(classdef) => {
+					self.resolve_names_classdef(classdef);
+				}
+				ast::TopLevel::ClassExtend(_) => todo!(),
+				ast::TopLevel::ConstDef(_) => todo!(),
+				ast::TopLevel::EnumDef(enumdef) => {
+					self.resolve_names_enumdef(enumdef);
+				}
+				ast::TopLevel::MixinClassDef(_) => todo!(),
+				ast::TopLevel::StructDef(_) => todo!(),
+				ast::TopLevel::StructExtend(_) => todo!(),
+				ast::TopLevel::Include(_) | ast::TopLevel::Version(_) => continue,
+			}
+		}
+	}
+
+	fn resolve_names_classdef(&mut self, classdef: ast::ClassDef) {
+		let iname = self
+			.strings
+			.type_name_nocase(classdef.name().unwrap().text());
+		let datum = self.scopes.lookup(iname).unwrap().clone();
+
+		let project::Datum::ZScript(Datum::Class(dat_class)) = datum.as_ref() else {
+			unreachable!()
+		};
+
+		// Parent and `replaces` clauses ///////////////////////////////////////
+
+		if let Some(anc_iname) = dat_class.parent {
+			if let Some(d) = self.scopes.lookup(anc_iname).cloned() {
+				self.parsed
+					.resolved
+					.insert(classdef.parent_class().unwrap().text_range(), d);
+			}
+		}
+
+		for qual in classdef.qualifiers() {
+			let ast::ClassQual::Replaces(replaces) = qual else {
+				continue;
+			};
+
+			let Ok(ident) = replaces.replaced() else {
+				continue;
+			};
+
+			let r_iname = self.strings.get_or_intern_nocase(ident.text());
+
+			let Some(d) = self.scopes.lookup(IName::Type(r_iname)) else {
+				continue;
+			};
+
+			self.parsed.resolved.insert(ident.text_range(), d.clone());
+		}
+
+		// Push class' scope and its ancestors' scopes /////////////////////////
+
+		let len = self.scopes.len();
+		let mut rel_datum = datum.clone();
+
+		loop {
+			let project::Datum::ZScript(Datum::Class(d)) = rel_datum.as_ref() else {
+				unreachable!()
+			};
+
+			let Some(anc_iname) = d.parent else {
+				// `d` is `Object`; it inherits from nothing.
+				break;
+			};
+
+			let Some(anc_datum) = self.scopes.lookup(anc_iname).cloned() else {
+				break;
+			};
+
+			let project::Datum::ZScript(Datum::Class(p)) = anc_datum.as_ref() else {
+				unreachable!()
+			};
+
+			self.scopes.insert(
+				len,
+				StackedScope {
+					project_ix: Some(self.project_ix),
+					inner: p.scope.clone(),
+					is_addendum: true,
+				},
+			);
+
+			rel_datum = anc_datum;
+		}
+
+		self.scopes.push(StackedScope {
+			project_ix: Some(self.project_ix),
+			inner: dat_class.scope.clone(),
+			is_addendum: false,
+		});
+
+		// Body ////////////////////////////////////////////////////////////////
+
+		for innard in classdef.innards() {
+			match innard {
+				ast::ClassInnard::Field(field) => {
+					if let Ok(type_spec) = field.type_spec() {
+						self.resolve_names_typeref(type_spec);
+					}
+				}
+				ast::ClassInnard::Enum(enumdef) => {
+					self.resolve_names_enumdef(enumdef);
+				}
+				// TODO
+				_ => {}
+			}
+		}
+
+		self.scopes.pop_with_addenda();
+	}
+
+	fn resolve_names_enumdef(&mut self, _: ast::EnumDef) {
+		// TODO
+	}
+
+	fn resolve_names_expr(&mut self, _: ast::Expr) {
+		// TODO
+	}
+
+	fn resolve_names_typeref(&mut self, typeref: ast::TypeRef) {
+		match typeref.core() {
+			ast::CoreType::DynArray(arr_t) => {
+				if let Ok(tref) = arr_t.element_type() {
+					self.resolve_names_typeref(tref);
+				}
+			}
+			// TODO
+			ast::CoreType::Let(_) => {
+				// Valid parse, invalid semantically.
+				return;
+			}
+			_ => {}
+		}
+
+		if let Some(array_len) = typeref.array_len() {
+			if let Some(expr) = array_len.expr() {
+				self.resolve_names_expr(expr);
+			}
+		}
 	}
 }
 

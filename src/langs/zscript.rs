@@ -27,12 +27,13 @@ use lsp_types::{
 };
 use parking_lot::Mutex;
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 
 use crate::{
 	lines::{LineCol, LineIndex, TextDelta},
 	names::IName,
 	paths::PathInterner,
-	project::{self, ParseErrors, ParsedFile, Project, SourceFile, StackedScope},
+	project::{self, ParseErrors, ParsedFile, Project, ScopeStack, SourceFile},
 	request, util, Core, Error, ErrorBox, LangId, UnitResult,
 };
 
@@ -76,11 +77,11 @@ pub(crate) fn req_references(ctx: request::Context, pos: Position) -> UnitResult
 	let subvecs = Mutex::new(vec![]);
 	let ident = token.text();
 
-	for i in (0..=ctx.ix_project).rev() {
+	for i in (0..=ctx.project_ix).rev() {
 		let project = &ctx.core.projects[i];
 		let paths = project.paths();
 
-		project.all_files_par().for_each(|(file_id, sfile)| {
+		project.all_files().for_each(|(file_id, sfile)| {
 			let path = paths.resolve_native(file_id).unwrap();
 			subvecs.lock().push(references_to(sfile, path, ident));
 		});
@@ -208,7 +209,7 @@ pub(crate) fn req_semtokens_range(ctx: request::Context, range: lsp_types::Range
 }
 
 #[must_use]
-fn prepare_scope_stack(ctx: &request::Context, token: &SyntaxToken) -> Option<Vec<StackedScope>> {
+fn prepare_scope_stack(ctx: &request::Context, token: &SyntaxToken) -> Option<ScopeStack> {
 	// To understand this, consider an example:
 	// - `token` is an identifier for a variable in a function in a class.
 	// - `global_node` is the class' AST node.
@@ -238,7 +239,7 @@ fn prepare_scope_stack(ctx: &request::Context, token: &SyntaxToken) -> Option<Ve
 
 #[must_use]
 fn lookup_symbol<const N: usize>(
-	scopes: &[StackedScope],
+	scopes: &ScopeStack,
 	inames: [IName; N],
 ) -> Option<&project::Datum> {
 	for scope in scopes.iter().rev() {
@@ -253,7 +254,7 @@ fn lookup_symbol<const N: usize>(
 #[must_use]
 fn location_by_inames<const N: usize>(
 	ctx: &request::Context,
-	scopes: &[StackedScope],
+	scopes: &ScopeStack,
 	inames: [IName; N],
 	token: &SyntaxToken,
 ) -> ControlFlow<Result<GotoDefinitionResponse, ErrorBox>> {
@@ -264,13 +265,13 @@ fn location_by_inames<const N: usize>(
 			continue;
 		};
 
-		let Some(i) = scope.ix_project else {
+		let Some(i) = scope.project_ix else {
 			return ControlFlow::Continue(());
 		};
 
 		let project = &ctx.core.projects[i];
 
-		let datpos = match d {
+		let datpos = match d.as_ref() {
 			project::Datum::ZScript(dat_zs) => {
 				if let Some(dpos) = dat_zs.pos() {
 					dpos
@@ -309,6 +310,14 @@ pub(crate) fn rebuild_include_tree(
 ) -> std::io::Result<Vec<Diagnostic>> {
 	tracing::debug!("(Re)building ZScript include tree...");
 
+	#[derive(Debug)]
+	struct SourceFileWrapper(SourceFile);
+
+	// SAFETY: The non-thread-safe part of `SourceFile` is the resolved-names
+	// table, which goes entirely untouched in this function.
+	unsafe impl Send for SourceFileWrapper {}
+	unsafe impl Sync for SourceFileWrapper {}
+
 	#[derive(Debug, Clone, Copy)]
 	struct Context<'p> {
 		paths: &'p PathInterner,
@@ -319,7 +328,7 @@ pub(crate) fn rebuild_include_tree(
 	#[derive(Debug)]
 	struct StagedFile {
 		path: PathBuf,
-		source: SourceFile,
+		source: SourceFileWrapper,
 	}
 
 	fn recur(ctx: Context, base: &Path, path: PathBuf, text: String) {
@@ -381,7 +390,7 @@ pub(crate) fn rebuild_include_tree(
 
 		ctx.output.lock().push(StagedFile {
 			path,
-			source: SourceFile {
+			source: SourceFileWrapper(SourceFile {
 				lang: LangId::ZScript,
 				text,
 				lndx,
@@ -389,8 +398,10 @@ pub(crate) fn rebuild_include_tree(
 					green,
 					symbols: vec![],
 					errors: ParseErrors::ZScript(errors),
+					resolved: FxHashMap::default(),
 				}),
-			},
+				nameres_valid: false,
+			}),
 		});
 	}
 
@@ -469,7 +480,7 @@ pub(crate) fn rebuild_include_tree(
 
 	for file in output {
 		let file_id = project.paths_mut().get_or_intern_nocase(&file.path);
-		project.set_file(file_id, file.source);
+		project.set_file(file_id, file.source.0);
 		project.set_dirty(file_id);
 	}
 
@@ -488,6 +499,7 @@ pub(crate) fn full_reparse(sfile: &mut SourceFile) -> UnitResult {
 		green,
 		symbols: vec![],
 		errors: ParseErrors::ZScript(errors),
+		resolved: FxHashMap::default(),
 	});
 
 	Ok(())
@@ -687,7 +699,9 @@ mixin class doomls_Pickup
 				green,
 				symbols: vec![],
 				errors: ParseErrors::ZScript(errors),
+				resolved: FxHashMap::default(),
 			}),
+			nameres_valid: false,
 		};
 
 		let removed = sfile.text.remove(93);
@@ -743,7 +757,9 @@ mixin class doomls_Pickup
 				green,
 				symbols: vec![],
 				errors: ParseErrors::ZScript(errors),
+				resolved: FxHashMap::default(),
 			}),
+			nameres_valid: false,
 		};
 
 		assert_eq!(sfile.parse_diagnostics().len(), 1);

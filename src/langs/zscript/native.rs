@@ -227,7 +227,7 @@ pub(crate) fn register(core: &crate::Core, scope: &mut Scope) {
 
 		scope.insert(
 			iname,
-			project::Datum::ZScript(Datum::Primitive(PrimitiveDatum {
+			Rc::new(project::Datum::ZScript(Datum::Primitive(PrimitiveDatum {
 				name: iname,
 				doc: builtin.doc,
 				_scope: {
@@ -243,7 +243,7 @@ pub(crate) fn register(core: &crate::Core, scope: &mut Scope) {
 
 					Rc::new(scope)
 				},
-			})),
+			}))),
 		);
 	}
 
@@ -260,7 +260,7 @@ pub(crate) fn register(core: &crate::Core, scope: &mut Scope) {
 
 		scope.insert(
 			iname,
-			project::Datum::ZScript(Datum::Class(ClassDatum {
+			Rc::new(project::Datum::ZScript(Datum::Class(ClassDatum {
 				name: iname,
 				source: ClassSource::Native {
 					decl: class.decl,
@@ -294,7 +294,7 @@ pub(crate) fn register(core: &crate::Core, scope: &mut Scope) {
 						None
 					}
 				},
-			})),
+			}))),
 		);
 	}
 
@@ -312,7 +312,7 @@ fn register_enum(core: &crate::Core, scope: &mut Scope, native: &RawNativeEnum) 
 
 	scope.insert(
 		iname,
-		project::Datum::ZScript(Datum::Enum(EnumDatum {
+		Rc::new(project::Datum::ZScript(Datum::Enum(EnumDatum {
 			name: iname,
 			source: EnumSource::Native {
 				decl: native.decl,
@@ -328,7 +328,7 @@ fn register_enum(core: &crate::Core, scope: &mut Scope, native: &RawNativeEnum) 
 
 				set
 			},
-		})),
+		}))),
 	);
 }
 
@@ -337,7 +337,7 @@ fn register_function(core: &crate::Core, scope: &mut Scope, native: &RawNativeFu
 
 	scope.insert(
 		iname,
-		project::Datum::ZScript(Datum::Function(FunctionDatum {
+		Rc::new(project::Datum::ZScript(Datum::Function(FunctionDatum {
 			name: iname,
 			source: FunctionSource::Native {
 				signature: native.decl,
@@ -346,7 +346,7 @@ fn register_function(core: &crate::Core, scope: &mut Scope, native: &RawNativeFu
 			is_static: native.is_static,
 			is_const: native.is_const,
 			body: None,
-		})),
+		}))),
 	);
 }
 
@@ -355,7 +355,7 @@ fn register_struct(core: &crate::Core, scope: &mut Scope, native: &RawNativeStru
 
 	scope.insert(
 		iname,
-		project::Datum::ZScript(Datum::Struct(StructDatum {
+		Rc::new(project::Datum::ZScript(Datum::Struct(StructDatum {
 			name: iname,
 			source: StructSource::Native {
 				decl: native.decl,
@@ -378,7 +378,7 @@ fn register_struct(core: &crate::Core, scope: &mut Scope, native: &RawNativeStru
 
 				Rc::new(scope)
 			},
-		})),
+		}))),
 	);
 }
 
@@ -387,13 +387,13 @@ fn register_value(core: &crate::Core, scope: &mut Scope, native: &RawNativeValue
 
 	scope.insert(
 		iname,
-		project::Datum::ZScript(Datum::Value(ValueDatum {
+		Rc::new(project::Datum::ZScript(Datum::Value(ValueDatum {
 			name: iname,
 			source: ValueSource::Native {
 				decl: native.decl,
 				doc: native.doc,
 			},
 			kind: native.kind,
-		})),
+		}))),
 	);
 }

@@ -12,7 +12,11 @@ use doomfront::{
 use lsp_server::{ErrorCode, Message, Response};
 use lsp_types::{GotoDefinitionResponse, Position};
 
-use crate::{lines::LineCol, request, Core, Error, ErrorBox, UnitResult};
+use crate::{
+	lines::LineCol,
+	project::{self, ParsedFile},
+	request, util, Core, Error, ErrorBox, UnitResult,
+};
 
 use super::location_by_inames;
 
@@ -46,12 +50,11 @@ pub(crate) fn req_goto(ctx: request::Context, position: Position) -> UnitResult 
 			if token.text().eq_ignore_ascii_case("self") && ast::IdentExpr::can_cast(parent.kind())
 			{
 				// No useful information to provide here.
-				Core::respond_null(ctx.conn, ctx.id)?;
 				tracing::debug!("GotoDefinition miss - `self` identifier.");
-				return Ok(());
+				return Core::respond_null(ctx.conn, ctx.id);
 			}
 
-			match goto_ident(&ctx, token) {
+			match goto_ident(&ctx, token, parsed) {
 				ControlFlow::Continue(()) => {
 					tracing::debug!("GotoDefinition miss - unknown symbol.");
 					Core::respond_null(ctx.conn, ctx.id)
@@ -111,15 +114,36 @@ pub(crate) fn req_goto(ctx: request::Context, position: Position) -> UnitResult 
 fn goto_ident(
 	ctx: &request::Context,
 	token: SyntaxToken,
+	parsed: &ParsedFile,
 ) -> ControlFlow<Result<GotoDefinitionResponse, ErrorBox>> {
-	let iname_tgt_t = ctx.core.strings.type_name_nocase(token.text());
-	let iname_tgt_v = ctx.core.strings.value_name_nocase(token.text());
+	debug_assert!(ctx.sfile.nameres_valid);
 
-	let Some(scopes) = super::prepare_scope_stack(ctx, &token) else {
+	let Some(datum) = parsed.resolved.get(&token.text_range()) else {
 		return ControlFlow::Continue(());
 	};
 
-	location_by_inames(ctx, &scopes, [iname_tgt_t, iname_tgt_v], &token)
+	let datpos = match datum.as_ref() {
+		project::Datum::ZScript(dat_zs) => {
+			if let Some(dpos) = dat_zs.pos() {
+				dpos
+			} else {
+				return ControlFlow::Break(Ok(GotoDefinitionResponse::Array(vec![])));
+			}
+		}
+	};
+
+	let path = ctx.project.paths().resolve_native(datpos.file).unwrap();
+	let sfile = ctx.project.get_file(datpos.file).unwrap();
+
+	match util::make_location(
+		&sfile.lndx,
+		path,
+		datpos.name_range.start(),
+		token.text().len(),
+	) {
+		Ok(l) => ControlFlow::Break(Ok(GotoDefinitionResponse::Scalar(l))),
+		Err(err) => ControlFlow::Break(Err(Box::new(err))),
+	}
 }
 
 fn goto_name(

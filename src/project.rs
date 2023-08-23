@@ -8,7 +8,6 @@ use doomfront::{
 	LangExt, ParseError,
 };
 use lsp_types::Diagnostic;
-use rayon::prelude::{ParallelBridge, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::error;
 
@@ -72,17 +71,12 @@ impl Project {
 	}
 
 	#[must_use]
-	pub(crate) fn lookup_global(&self, iname: IName) -> Option<&Datum> {
+	pub(crate) fn lookup_global(&self, iname: IName) -> Option<&Rc<Datum>> {
 		self.symbols.get(&iname)
 	}
 
 	pub(crate) fn all_files(&self) -> impl Iterator<Item = (FileId, &SourceFile)> {
 		self.files.iter().map(|t| (*t.0, t.1))
-	}
-
-	#[must_use = "iterators are lazy and do nothing unless consumed"]
-	pub(crate) fn all_files_par(&self) -> impl ParallelIterator<Item = (FileId, &SourceFile)> {
-		self.all_files().par_bridge()
 	}
 
 	#[must_use]
@@ -117,12 +111,16 @@ impl Project {
 	pub(crate) fn add_file(&mut self, file_id: FileId, text: String) {
 		let lndx = LineIndex::new(&text);
 
-		self.set_file(file_id, SourceFile {
-			lang: LangId::Unknown,
-			text,
-			lndx,
-			parsed: None,
-		});
+		self.set_file(
+			file_id,
+			SourceFile {
+				lang: LangId::Unknown,
+				text,
+				lndx,
+				parsed: None,
+				nameres_valid: false,
+			},
+		);
 	}
 
 	pub(crate) fn remove_file(&mut self, path: PathBuf) {
@@ -145,22 +143,31 @@ impl Project {
 
 		for iname in &parsed.symbols {
 			unsafe {
-				(*symbols).remove(&iname);
+				(*symbols).remove(iname);
 			}
 		}
 	}
 
-	pub(crate) fn update_global_symbols(&mut self, strings: &StringInterner) {
+	/// Returns `true` if any files were dirty.
+	#[must_use]
+	pub(crate) fn update_global_symbols(&mut self, strings: &StringInterner) -> bool {
+		if self.dirty.is_empty() {
+			return false;
+		}
+
 		let all_dirty = self.dirty.drain().collect::<Vec<_>>();
 		let symbols = Rc::as_ptr(&self.symbols).cast_mut();
 
-		for file_id in all_dirty {
+		// Update the global symbol table by removing symbols contributed
+		// by "dirty" files and then re-applying their contributions.
+
+		for file_id in all_dirty.iter().copied() {
 			let sfile = self.get_file_mut(file_id).unwrap();
 			let Some(parsed) = sfile.parsed.as_mut() else { continue; };
 
 			for r in parsed.symbols.drain(..) {
 				unsafe {
-					(*symbols).remove(&r);
+					let _ = (*symbols).remove(&r).unwrap();
 				}
 			}
 
@@ -189,6 +196,14 @@ impl Project {
 			for iname in contributed {
 				parsed.symbols.push(iname);
 			}
+		}
+
+		true
+	}
+
+	pub(crate) fn invalidate_resolved_names(&mut self) {
+		for file in self.files.values_mut() {
+			file.nameres_valid = false;
 		}
 	}
 
@@ -238,6 +253,7 @@ pub(crate) struct SourceFile {
 	pub(crate) text: String,
 	pub(crate) lndx: LineIndex,
 	pub(crate) parsed: Option<ParsedFile>,
+	pub(crate) nameres_valid: bool,
 }
 
 impl SourceFile {
@@ -260,6 +276,8 @@ pub(crate) struct ParsedFile {
 	/// recomputed.
 	pub(crate) symbols: Vec<IName>,
 	pub(crate) errors: ParseErrors,
+	/// Maps tokens in this file to symbols.
+	pub(crate) resolved: FxHashMap<TextRange, Rc<Datum>>,
 }
 
 impl ParsedFile {
@@ -307,7 +325,7 @@ impl Datum {
 		}
 	}
 
-	pub(crate) fn add_scopes_containing(&self, scopes: &mut Vec<StackedScope>, range: TextRange) {
+	pub(crate) fn add_scopes_containing(&self, scopes: &mut ScopeStack, range: TextRange) {
 		match self {
 			Self::ZScript(dat_zs) => {
 				dat_zs.add_scopes_containing(scopes, range);
@@ -316,11 +334,50 @@ impl Datum {
 	}
 }
 
-pub(crate) type Scope = FxHashMap<IName, Datum>;
+pub(crate) type Scope = FxHashMap<IName, Rc<Datum>>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct StackedScope {
-	pub(crate) ix_project: Option<usize>,
+	pub(crate) project_ix: Option<usize>,
 	pub(crate) inner: Rc<Scope>,
 	pub(crate) is_addendum: bool,
+}
+
+/// Only exists to add convenience methods.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ScopeStack(Vec<StackedScope>);
+
+impl std::ops::Deref for ScopeStack {
+	type Target = Vec<StackedScope>;
+
+	fn deref(&self) -> &Self::Target {
+		&self.0
+	}
+}
+
+impl std::ops::DerefMut for ScopeStack {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		&mut self.0
+	}
+}
+
+impl ScopeStack {
+	#[must_use]
+	pub(crate) fn lookup(&self, iname: IName) -> Option<&Rc<Datum>> {
+		self.0
+			.iter()
+			.rev()
+			.find_map(|scope| scope.inner.get(&iname))
+	}
+
+	/// Used for ZScript classes with parent scopes, for example.
+	/// Pops once unconditionally (e.g. a class itself) and then keeps popping
+	/// until the last element is not an addendum.
+	pub(crate) fn pop_with_addenda(&mut self) {
+		let _ = self.0.pop().unwrap();
+
+		while self.0.last().is_some_and(|s| s.is_addendum) {
+			let _ = self.0.pop().unwrap();
+		}
+	}
 }
