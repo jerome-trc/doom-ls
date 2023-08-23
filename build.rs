@@ -197,7 +197,7 @@ fn zscript_enum_variants(bw: &mut BufWriter<File>, file_path: &Path) -> UnitResu
 	}
 
 	category(variants, bw, |bw, name, decl, doc| {
-		write_zscript_value_datum(bw, name, &decl, doc, "EnumVariant")?;
+		write_zscript_value_datum(bw, name, decl, doc, "EnumVariant")?;
 		Ok(())
 	})?;
 
@@ -263,7 +263,7 @@ fn zscript_process_functions(bw: &mut BufWriter<File>, top_table: &TomlTable) ->
 		}
 
 		category(class_methods, bw, |bw, name, decl, doc| {
-			write_zscript_function_datum(bw, name, &decl, doc, true, decl.ends_with("const"))?;
+			write_zscript_function_datum(bw, name, decl, doc, true, decl.ends_with("const"))?;
 			Ok(())
 		})?;
 	}
