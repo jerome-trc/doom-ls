@@ -154,6 +154,11 @@ fn doc_symbol_class_innard(
 				docsyms.push(docsym);
 			}
 		}
+		ast::ClassInnard::Struct(structdef) => {
+			if let Some(docsym) = doc_symbol_struct(ctx, structdef) {
+				docsyms.push(docsym);
+			}
+		}
 		ast::ClassInnard::StaticConst(sconst) => {
 			if let Some(docsym) = doc_symbol_staticconst(ctx, sconst) {
 				docsyms.push(docsym);
