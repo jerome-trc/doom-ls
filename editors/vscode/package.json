@@ -733,7 +733,7 @@
 			"doomls.server.enable": {
 				"type": "boolean",
 				"default": true,
-				"markdownDescription": "Enable the language server."
+				"markdownDescription": "Whether the language server starts automatically."
 			},
 			"doomls.loadOrder": {
 				"type": "array",
