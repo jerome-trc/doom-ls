@@ -1,11 +1,13 @@
 use std::{
 	borrow::Borrow,
-	hash::{Hash, Hasher}, path::{PathBuf, Path},
+	hash::{Hash, Hasher},
+	path::{Path, PathBuf},
 };
 
-use doomfront::rowan::{cursor::SyntaxToken, GreenToken};
+use append_only_vec::AppendOnlyVec;
+use doomfront::rowan::{cursor::SyntaxToken, GreenToken, SyntaxKind};
 
-use crate::FxIndexSet;
+use crate::FxDashMap;
 
 /// An index into a [`NameInterner`]. Used for symbol lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -16,36 +18,82 @@ pub(crate) struct NameIx(u32);
 pub(crate) enum NsName {
 	CVar(NameIx),
 	FlagDef(NameIx),
+	Local(NameIx),
 	Property(NameIx),
-	/// "Pseudo-random number generator".
+	/// For pseudo-random number generators declared implicitly by ZScript and DECORATE.
 	Prng(NameIx),
+	StateLabel(NameIx),
 	Type(NameIx),
 	Value(NameIx),
 }
 
+impl NsName {
+	#[must_use]
+	fn index(self) -> NameIx {
+		match self {
+			Self::CVar(ix)
+			| Self::FlagDef(ix)
+			| Self::Local(ix)
+			| Self::Property(ix)
+			| Self::Prng(ix)
+			| Self::StateLabel(ix)
+			| Self::Type(ix)
+			| Self::Value(ix) => ix,
+		}
+	}
+}
+
 /// A concurrent interner for [`IName`],
 /// allowing 32-bit indices to be used as map keys in place of pointers.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct NameInterner {
-	map: FxIndexSet<IName>,
+	array: AppendOnlyVec<IName>,
+	map: FxDashMap<IName, NameIx>,
 }
 
 impl NameInterner {
 	#[must_use]
-	pub(crate) fn intern(&mut self, token: &SyntaxToken) -> NameIx {
+	pub(crate) fn intern(&self, token: &SyntaxToken) -> NameIx {
 		let green = unsafe { std::mem::transmute::<_, &GreenTokenData>(token.green()) };
 
-		if let Some(ix) = self.map.get_index_of(green) {
-			return NameIx(ix as u32);
+		if let Some(kvp) = self.map.get(green) {
+			return *kvp.value();
 		}
 
-		let (ix, _) = self.map.insert_full(IName(green.0.to_owned()));
-		NameIx(ix as u32)
+		self.add(green.0.to_owned())
 	}
 
 	#[must_use]
-	pub(crate) fn resolve(&self, ix: NameIx) -> &str {
-		self.map[ix.0 as usize].0.text()
+	pub(crate) fn intern_str(&self, string: &str) -> NameIx {
+		if let Some(kvp) = self.map.get(string) {
+			return *kvp.value();
+		}
+
+		self.add(GreenToken::new(SyntaxKind(0), string))
+	}
+
+	#[must_use]
+	pub(crate) fn resolve(&self, ns_name: NsName) -> &str {
+		self.array[ns_name.index().0 as usize].0.text()
+	}
+
+	#[must_use]
+	fn add(&self, token: GreenToken) -> NameIx {
+		let v = IName(token);
+		let ix = self.array.push(v.clone());
+		debug_assert!(ix < (u32::MAX as usize));
+		let ret = NameIx(ix as u32);
+		self.map.insert(v, ret);
+		ret
+	}
+}
+
+impl Default for NameInterner {
+	fn default() -> Self {
+		Self {
+			array: AppendOnlyVec::new(),
+			map: FxDashMap::default(),
+		}
 	}
 }
 
@@ -147,34 +195,130 @@ impl Hash for GreenTokenData {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct PathIx(u32);
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct PathInterner {
-	map: FxIndexSet<PathBuf>,
+	array: AppendOnlyVec<PathArc>,
+	map: FxDashMap<PathArc, PathIx>,
 }
 
 impl PathInterner {
 	#[must_use]
-	pub(crate) fn intern(&mut self, path: &Path) -> PathIx {
-		if let Some(ix) = self.map.get_index_of(path) {
-			return PathIx(ix as u32);
+	pub(crate) fn intern(&self, path: &Path) -> PathIx {
+		if let Some(kvp) = self.map.get(path) {
+			return *kvp.value();
 		}
 
-		let (ix, _) = self.map.insert_full(path.to_owned());
-		PathIx(ix as u32)
+		self.add(PathArc::from(path))
 	}
 
 	#[must_use]
-	pub(crate) fn intern_owned(&mut self, pathbuf: PathBuf) -> PathIx {
-		if let Some(ix) = self.map.get_index_of(&pathbuf) {
-			return PathIx(ix as u32);
+	pub(crate) fn intern_owned(&self, pathbuf: PathBuf) -> PathIx {
+		if let Some(kvp) = self.map.get(pathbuf.as_path()) {
+			return *kvp.value();
 		}
 
-		let (ix, _) = self.map.insert_full(pathbuf);
-		PathIx(ix as u32)
+		self.add(PathArc::from(pathbuf))
+	}
+
+	#[must_use]
+	fn add(&self, path: PathArc) -> PathIx {
+		let ix = self.array.push(path.clone());
+		debug_assert!(ix < (u32::MAX as usize));
+		let ret = PathIx(ix as u32);
+		self.map.insert(path, ret);
+		ret
 	}
 
 	#[must_use]
 	pub(crate) fn resolve(&self, ix: PathIx) -> &Path {
-		self.map[ix.0 as usize].as_path()
+		self.array[ix.0 as usize].as_path()
+	}
+}
+
+impl Default for PathInterner {
+	fn default() -> Self {
+		Self {
+			array: AppendOnlyVec::new(),
+			map: FxDashMap::default(),
+		}
+	}
+}
+
+#[derive(Clone)]
+struct PathArc(triomphe::ThinArc<(), u8>);
+
+impl std::fmt::Debug for PathArc {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "\"{}\"", self.as_str())
+	}
+}
+
+impl PathArc {
+	#[must_use]
+	fn as_str(&self) -> &str {
+		// SAFETY: All constructions of this type go through `to_string_lossy`.
+		unsafe { std::str::from_utf8_unchecked(&self.0.slice) }
+	}
+
+	#[must_use]
+	fn as_path(&self) -> &Path {
+		Path::new(self.as_str())
+	}
+}
+
+impl From<&Path> for PathArc {
+	fn from(value: &Path) -> Self {
+		Self(triomphe::ThinArc::from_header_and_slice(
+			(),
+			value.to_string_lossy().as_bytes(),
+		))
+	}
+}
+
+impl From<PathBuf> for PathArc {
+	fn from(value: PathBuf) -> Self {
+		Self(triomphe::ThinArc::from_header_and_slice(
+			(),
+			value.to_string_lossy().as_bytes(),
+		))
+	}
+}
+
+impl std::borrow::Borrow<Path> for PathArc {
+	fn borrow(&self) -> &Path {
+		self.as_path()
+	}
+}
+
+impl PartialEq<Path> for PathArc {
+	fn eq(&self, other: &Path) -> bool {
+		std::borrow::Borrow::<Path>::borrow(self) == other
+	}
+}
+
+impl PartialEq for PathArc {
+	fn eq(&self, other: &Self) -> bool {
+		std::borrow::Borrow::<Path>::borrow(self) == std::borrow::Borrow::<Path>::borrow(other)
+	}
+}
+
+impl Eq for PathArc {}
+
+impl Hash for PathArc {
+	fn hash<H: Hasher>(&self, state: &mut H) {
+		std::borrow::Borrow::<Path>::borrow(self).hash(state)
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+
+	#[test]
+	fn smoke_paths() {
+		let paths = PathInterner::default();
+		let i0 = paths.intern(Path::new("/home/user/my_doom_mod/ZSCRIPT.zs"));
+		let i1 = paths.intern(Path::new("/home/user/my_doom_mod/ZSCRIPT.zs"));
+		assert_eq!(i0, i1);
 	}
 }

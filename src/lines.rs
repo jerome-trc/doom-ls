@@ -457,7 +457,9 @@ pub(crate) fn splice_changes(
 
 	for change in &changes {
 		// The `None` case can't happen as we have handled it above already.
-		let Some(range) = change.range else { unreachable!() };
+		let Some(range) = change.range else {
+			unreachable!()
+		};
 
 		if index_valid <= range.end.line {
 			pos_db = PositionDb::new(prev_text);
@@ -698,5 +700,47 @@ fn analysis_position(pos: lsp_types::Position) -> PositionUtf8 {
 	PositionUtf8 {
 		line: pos.line,
 		col: pos.character,
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+
+	#[test]
+	fn roundtrip() {
+		const SOURCE: &str = r##"class MyProjectile : Actor
+	{
+		Default
+		{
+			Projectile;
+		}
+	}
+	"##;
+
+		let lines = LineIndex::new(&SOURCE);
+		let span = TextRange::new(TextSize::from(43), TextSize::from(54));
+
+		let lsp_r = lsp_types::Range {
+			start: lsp_types::Position::from(lines.line_col(span.start())),
+			end: lsp_types::Position::from(lines.line_col(span.end())),
+		};
+
+		let rowan_r = TextRange::new(
+			lines
+				.offset(LineCol {
+					line: lsp_r.start.line,
+					col: lsp_r.start.character,
+				})
+				.unwrap(),
+			lines
+				.offset(LineCol {
+					line: lsp_r.end.line,
+					col: lsp_r.end.character,
+				})
+				.unwrap(),
+		);
+
+		assert_eq!("Projectile;", &SOURCE[rowan_r]);
 	}
 }

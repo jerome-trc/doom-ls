@@ -943,6 +943,11 @@
 			"command": "doomls.stopServer",
 			"title": "Stop Language Server",
 			"category": "DoomLS"
+		},
+		{
+			"command": "doomls.symGraph",
+			"title": "(DEBUG) Show Symbol Graph",
+			"category": "DoomLS"
 		}
     ],
 	"semanticTokenTypes": [

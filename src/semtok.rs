@@ -66,7 +66,7 @@ bitflags::bitflags! {
 }
 
 pub(crate) struct Highlighter<'li> {
-	lndx: &'li LineIndex,
+	lines: &'li LineIndex,
 	tokens: Vec<SemanticToken>,
 	prev_line: u32,
 	prev_col: u32,
@@ -74,9 +74,9 @@ pub(crate) struct Highlighter<'li> {
 
 impl<'li> Highlighter<'li> {
 	#[must_use]
-	pub(crate) fn new(lndx: &'li LineIndex) -> Self {
+	pub(crate) fn new(lines: &'li LineIndex) -> Self {
 		Self {
-			lndx,
+			lines,
 			tokens: vec![],
 			prev_line: 0,
 			prev_col: 0,
@@ -92,7 +92,7 @@ impl<'li> Highlighter<'li> {
 	}
 
 	fn advance_impl(&mut self, semtok: SemToken, range: TextRange, bits: u32) {
-		let linecol = self.lndx.line_col(range.start());
+		let linecol = self.lines.line_col(range.start());
 		let mut c = linecol;
 
 		if !self.tokens.is_empty() {

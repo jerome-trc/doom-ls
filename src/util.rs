@@ -1,16 +1,18 @@
+//! Helper symbols that don't belong anywhere else.
+
 use std::path::{Path, PathBuf};
 
 use doomfront::{
-	rowan::{SyntaxNode, SyntaxText, TextRange},
+	rowan::{SyntaxNode, SyntaxText},
 	LangExt,
 };
 use lsp_server::{Connection, Message, Notification, RequestId, Response};
 use lsp_types::{
 	notification::{Notification as LspNotification, ShowMessage},
-	MessageType, ShowMessageParams, Url,
+	Diagnostic, DiagnosticRelatedInformation, DiagnosticTag, MessageType, ShowMessageParams, Url,
 };
 
-use crate::{error::Error, lines::LineIndex, UnitResult};
+use crate::{error::Error, UnitResult};
 
 /// `whitespace` is used to ensure that whitespace tokens have their contents
 /// replaced with a single space character.
@@ -61,23 +63,15 @@ pub(crate) fn parse_uri(string: &str) -> Result<PathBuf, Error> {
 
 pub(crate) fn message(conn: &Connection, text: String, msg_type: MessageType) -> UnitResult {
 	conn.sender
-	.send(Message::Notification(Notification {
-		method: ShowMessage::METHOD.to_string(),
-		params: serde_json::to_value(ShowMessageParams {
-			typ: msg_type,
-			message: text,
-		})
-		.unwrap(),
-	}))
-	.map_err(Error::from)
-}
-
-#[must_use]
-pub(crate) fn make_range(lndx: &LineIndex, range: TextRange) -> lsp_types::Range {
-	lsp_types::Range {
-		start: lsp_types::Position::from(lndx.line_col(range.start())),
-		end: lsp_types::Position::from(lndx.line_col(range.end())),
-	}
+		.send(Message::Notification(Notification {
+			method: ShowMessage::METHOD.to_string(),
+			params: serde_json::to_value(ShowMessageParams {
+				typ: msg_type,
+				message: text,
+			})
+			.unwrap(),
+		}))
+		.map_err(Error::from)
 }
 
 pub(crate) fn respond_null(conn: &Connection, id: RequestId) -> UnitResult {
@@ -105,26 +99,16 @@ pub(crate) fn uri_to_pathbuf(uri: &Url) -> Result<PathBuf, Error> {
 		});
 	}
 
-	let ret = match uri.to_file_path() {
-		Ok(pb) => pb,
-		Err(()) => {
-			return Err(Error::Process {
-				source: None,
-				ctx: format!("no host attached to file URI: {uri}"),
-			})
-		}
-	};
-
-	// DoomLS currently only supports languages running on the (G)ZDoom
-	// virtual file system, which normalizes all paths to ASCII lowercase.
-	let mut os_string = ret.into_os_string();
-	os_string.make_ascii_lowercase();
-	let ret = PathBuf::from(os_string);
-
-	ret.canonicalize().map_err(|err| Error::Process {
-		source: Some(Box::new(err)),
-		ctx: format!("failed to canonicalize file URI: {uri}"),
-	})
+	match uri.to_file_path() {
+		Ok(pb) => pb.canonicalize().map_err(|err| Error::Process {
+			source: Some(Box::new(err)),
+			ctx: format!("failed to canonicalize file URI: {uri}"),
+		}),
+		Err(()) => Err(Error::Process {
+			source: None,
+			ctx: format!("no host attached to file URI: {uri}"),
+		}),
+	}
 }
 
 /// Results are only valid for absolute paths; will always return `false` if
@@ -156,4 +140,29 @@ pub(crate) fn path_is_child_of(longer: &Path, shorter: &Path) -> bool {
 	}
 
 	true
+}
+
+#[derive(Debug)]
+pub(crate) struct DiagBuilder(pub(crate) Diagnostic);
+
+impl DiagBuilder {
+	#[must_use]
+	pub(crate) fn with_related(mut self, info: DiagnosticRelatedInformation) -> Self {
+		match self.0.related_information.as_mut() {
+			Some(r) => r.push(info),
+			None => self.0.related_information = Some(vec![info]),
+		};
+
+		self
+	}
+
+	#[must_use]
+	pub(crate) fn _with_tag(mut self, tag: DiagnosticTag) -> Self {
+		match self.0.tags.as_mut() {
+			Some(t) => t.push(tag),
+			None => self.0.tags = Some(vec![tag]),
+		};
+
+		self
+	}
 }

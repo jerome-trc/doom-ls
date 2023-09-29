@@ -1,11 +1,20 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 
+import * as lc from 'vscode-languageclient';
 import {
 	LanguageClient,
 	LanguageClientOptions,
 	ServerOptions,
 } from 'vscode-languageclient/node';
+
+export type SymGraphParams = {
+	textDocument: lc.TextDocumentIdentifier;
+};
+
+export const symGraph = new lc.RequestType<SymGraphParams, null, void>(
+    "doomls/symGraph",
+);
 
 let client: LanguageClient | null = null;
 
@@ -22,6 +31,11 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
 	ctx.subscriptions.push(vscode.commands.registerCommand("doomls.stopServer", () => {
 		stopServer();
+	}));
+
+	ctx.subscriptions.push(vscode.commands.registerTextEditorCommand("doomls.symGraph", (textEditor, _edit) => {
+		const params = { textDocument: { uri: textEditor.document.uri.toString() } };
+		client?.sendRequest(symGraph, params);
 	}));
 
 	const cfg = vscode.workspace.getConfiguration("doomls");
@@ -46,7 +60,16 @@ async function startServer(ctx: vscode.ExtensionContext) {
 	const initOpts = {};
 
 	const serverOpts: ServerOptions = {
-		command: ctx.asAbsolutePath(path.join("out", `doom-ls${ext}`))
+		command: ctx.asAbsolutePath(path.join("out", `doom-ls${ext}`)),
+		/*
+		For full Rust backtraces:
+
+		options: {
+			env: {
+				RUST_BACKTRACE: "full"
+			}
+		}
+		*/
 	};
 
 	const clientOpts: LanguageClientOptions = {

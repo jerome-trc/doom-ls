@@ -22,25 +22,24 @@ doomfront = { path = "../viletech/doomfront", features = [
 	"zdoom",
 ] } # Temporary local path.
 
+append-only-vec = "0.1.3"
 bitflags = "2.3.1"
-crossbeam-channel = "0.5.8"
-indexmap = { version = "1.9.3", features = ["rayon"] }
+crossbeam = "0.8.2"
+dashmap = "5.5.3"
+im = "15.1.0"
 indoc = "2.0.3"
-lsp-server = "0.7"
-lsp-types = "0.94"
+lsp-server = "0.7.4"
+lsp-types = "0.94.1"
 nohash-hasher = "0.2.0"
 parking_lot = { version = "0.12.1", features = ["arc_lock"] }
 petgraph = "0.6.3"
 rayon = "1.7.0"
-regex = "1.9.1"
+regex = "1.9.5"
 rustc-hash = "1.0.1"
 serde = { version = "1.0.163", features = ["derive"] }
 serde_json = "1.0.96"
-slotmap = "1.0.6"
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
-walkdir = "2.3.2"
+triomphe = "0.1.8"
 
 [build-dependencies]
-regex = "1.9.1"
-toml = "0.7.4"
