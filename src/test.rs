@@ -115,5 +115,5 @@ fn refresh() {
 
 	let guard = core.working.lock();
 	drop(guard);
-	core.finish_refresh(&conn1);
+	let _ = core.finish_refresh(&conn1);
 }

@@ -238,23 +238,15 @@ pub(crate) fn front3(world: &WorkingWorld, project_ix: usize, cur_project: &Proj
 			};
 
 			let sym_ix = SymIx(i as i32);
-			let file_node = SyntaxNode::new_root(src.green.as_ref().unwrap().clone());
 
-			let sym_elem = file_node.covering_element(sym.id.span);
-
-			let sym_node = match sym_elem {
-				NodeOrToken::Node(n) => n,
-				NodeOrToken::Token(t) => t.parent().unwrap(),
-			};
-
-			debug_assert_eq!(sym_node.kind(), Syn::kind_from_raw(sym.syn));
-
-			match sym_node.kind() {
+			match Syn::kind_from_raw(sym.syn) {
 				Syn::ClassDef => {
+					let sym_node = src.node_covering(sym.id.span);
 					let classdef = ast::ClassDef::cast(sym_node).unwrap();
 					define::define_class(&ctx, sym_ix, classdef);
 				}
 				Syn::FunctionDecl => {
+					let sym_node = src.node_covering(sym.id.span);
 					let fndecl = ast::FunctionDecl::cast(sym_node).unwrap();
 					let _ = define::function::define(&ctx, sym_ix, fndecl);
 				}

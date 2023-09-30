@@ -202,11 +202,12 @@ impl Core {
 			&& self.pending.malformed.is_empty()
 	}
 
-	pub(crate) fn finish_refresh(&mut self, conn: &Connection) {
+	#[must_use]
+	pub(crate) fn finish_refresh(&mut self, conn: &Connection) -> bool {
 		let Some(mut working) = self.working.try_lock() else {
 			// The worker thread is not done with the working world yet.
 			// Serve another LSP message before trying again.
-			return;
+			return false;
 		};
 
 		debug!("Updating ready world.");
@@ -263,6 +264,7 @@ impl Core {
 		}
 
 		debug!("Ready world is up-to-date.");
+		true
 	}
 }
 

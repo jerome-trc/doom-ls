@@ -164,6 +164,7 @@ pub(crate) fn walk(core: &mut Core) {
 		};
 
 		let src = project.files.get_mut(&root_id).unwrap();
+		src.lang = LangId::ZScript;
 
 		let rgx = VERSION_RGX.get_or_init(version_regex_init);
 

@@ -155,8 +155,24 @@ pub(super) fn handle(
 			return util::respond_null(conn, id);
 		}
 
-		tracing::debug!("References in current file's symbol graph:");
+		tracing::debug!("Definitions and references in current file's symbol graph:");
 		let mut output = "\r\n".to_string();
+
+		for sym in core.ready.decls.iter() {
+			if sym.id.file_id != file_id {
+				continue;
+			}
+
+			let Some(def_ix) = sym.definition() else {
+				continue;
+			};
+
+			let def = core.ready.definition(def_ix);
+
+			writeln!(output, "{:?}: {def:#?}", sym.id.span).unwrap();
+		}
+
+		writeln!(output).unwrap();
 
 		for (key, val) in core.ready.sym_graph.iter() {
 			let SymGraphKey::Reference(sgk) = key else {
@@ -173,9 +189,10 @@ pub(super) fn handle(
 
 			match core.ready.symbol(*sym_ix) {
 				OneOf::Left(u_sym) => {
-					let crit_span = u_sym.crit_span;
-					let decl = &src.text[crit_span];
-					writeln!(output, "{:#?} refers to `{}`", crit_span, decl).unwrap();
+					let (_, sym_project) = core.project_with(u_sym.id.file_id).unwrap();
+					let sym_src = sym_project.files.get(&u_sym.id.file_id).unwrap();
+					let decl = &sym_src.text[u_sym.crit_span];
+					writeln!(output, "{:#?} refers to `{}`", sgk.span, decl).unwrap();
 				}
 				OneOf::Right(in_sym) => {
 					writeln!(output, "{:#?} refers to `{}`", sgk.span, in_sym.decl).unwrap();

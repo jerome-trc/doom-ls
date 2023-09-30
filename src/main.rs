@@ -127,8 +127,9 @@ fn main_loop(mut core: Core, conn: Connection) -> UnitResult {
 		}
 
 		if work_tracker.is_some() {
-			core.finish_refresh(&conn);
-			let _ = work_tracker.take().unwrap();
+			if core.finish_refresh(&conn) {
+				let _ = work_tracker.take().unwrap();
+			}
 		} else if core.should_refresh() {
 			tracing::debug!("Dispatching a workspace refresh.");
 

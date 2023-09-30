@@ -12,8 +12,8 @@
 //! The exception is mixin statements and extensions, which aren't revisited.
 
 use doomfront::{
-	rowan::{ast::AstNode, Language, NodeOrToken, TextRange},
-	zdoom::zscript::{ast, Syn, SyntaxNode},
+	rowan::{ast::AstNode, Language, TextRange},
+	zdoom::zscript::{ast, Syn},
 };
 use lsp_types::{DiagnosticSeverity, OneOf};
 
@@ -52,6 +52,19 @@ pub(crate) fn declare_class_scope(
 		};
 
 		drop(globals);
+
+		if parent_ix == sym_ix {
+			ctx.raise(ctx.src.diag_builder(
+				parent_ident.text_range(),
+				DiagnosticSeverity::ERROR,
+				format!(
+					"class `{}` has circular inheritance",
+					ast.name().unwrap().text(),
+				),
+			));
+
+			return Some(Scope::default());
+		}
 
 		let sym = match ctx.symbol(parent_ix) {
 			OneOf::Left(u_sym) => u_sym,
@@ -714,26 +727,14 @@ fn require_scope(ctx: &FrontendContext, sym_ix: SymIx, sym: &Symbol) -> Option<S
 		..*ctx
 	};
 
-	let file_node = SyntaxNode::new_root(src.green.as_ref().unwrap().clone());
-
-	let sym_elem = file_node.covering_element(sym.id.span);
-
-	let sym_node = match sym_elem {
-		NodeOrToken::Node(n) => n,
-		NodeOrToken::Token(t) => t.parent().unwrap(),
-	};
-
-	debug_assert_eq!(sym_node.kind(), Syn::kind_from_raw(sym.syn));
-
-	let (sender, scope_opt) = match sym_node.kind() {
+	let (sender, scope_opt) = match Syn::kind_from_raw(sym.syn) {
 		Syn::ClassDef => {
 			let sender = match ctx.get_scope_or_sender(sym.id.0) {
 				OneOf::Left(sender) => sender,
-				OneOf::Right(scope) => {
-					return scope;
-				}
+				OneOf::Right(scope) => return scope,
 			};
 
+			let sym_node = src.node_covering::<Syn>(sym.id.span);
 			let classdef = ast::ClassDef::cast(sym_node).unwrap();
 			let scope_opt = declare_class_scope(&new_ctx, sym_ix, classdef);
 			(sender, scope_opt)
@@ -741,11 +742,10 @@ fn require_scope(ctx: &FrontendContext, sym_ix: SymIx, sym: &Symbol) -> Option<S
 		Syn::StructDef => {
 			let sender = match ctx.get_scope_or_sender(sym.id.0) {
 				OneOf::Left(sender) => sender,
-				OneOf::Right(scope) => {
-					return scope;
-				}
+				OneOf::Right(scope) => return scope,
 			};
 
+			let sym_node = src.node_covering::<Syn>(sym.id.span);
 			let structdef = ast::StructDef::cast(sym_node).unwrap();
 			let mut scope = Scope::default();
 			declare_struct_innards(&new_ctx, sym_ix, &mut scope, structdef.innards());
@@ -754,11 +754,10 @@ fn require_scope(ctx: &FrontendContext, sym_ix: SymIx, sym: &Symbol) -> Option<S
 		Syn::MixinClassDef => {
 			let sender = match ctx.get_scope_or_sender(sym.id.0) {
 				OneOf::Left(sender) => sender,
-				OneOf::Right(scope) => {
-					return scope;
-				}
+				OneOf::Right(scope) => return scope,
 			};
 
+			let sym_node = src.node_covering::<Syn>(sym.id.span);
 			let mixindef = ast::MixinClassDef::cast(sym_node).unwrap();
 			let scope_opt = declare_mixin_class_innards(&new_ctx, sym_ix, mixindef);
 			(sender, scope_opt)
