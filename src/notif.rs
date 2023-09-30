@@ -31,7 +31,9 @@ pub(super) fn handle(
 		Ok(())
 	})?;
 
-	notif = try_notif::<DidChangeConfiguration, _>(notif, |_| {
+	notif = try_notif::<DidChangeConfiguration, _>(notif, |params| {
+		#[cfg(debug_assertions)]
+		tracing::debug!("Config changed: {:#?}", params.settings);
 		// TODO
 		Ok(())
 	})?;

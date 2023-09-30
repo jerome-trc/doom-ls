@@ -94,8 +94,13 @@ impl Core {
 	}
 
 	pub(crate) fn reparse_dirty(&mut self, conn: &Connection) {
+		if self.pending.dirty.is_empty() {
+			return;
+		}
+
 		let mut dirty = std::mem::take(&mut self.pending.dirty);
-		self.pending.sema_invalid = !dirty.is_empty();
+
+		self.pending.sema_invalid = true;
 
 		for (file_id, params) in dirty.drain() {
 			let (_, project) = self.project_with_mut(file_id).unwrap();
@@ -198,8 +203,13 @@ impl Core {
 	}
 
 	pub(crate) fn finish_refresh(&mut self, conn: &Connection) {
-		debug!("Finishing a workspace refresh.");
-		let mut working = self.working.lock();
+		let Some(mut working) = self.working.try_lock() else {
+			// The worker thread is not done with the working world yet.
+			// Serve another LSP message before trying again.
+			return;
+		};
+
+		debug!("Updating ready world.");
 
 		self.ready.globals.clear();
 		self.ready.projects = std::mem::take(&mut working.projects);
@@ -364,7 +374,7 @@ impl ReadyWorld {
 		if sym_ix.0.is_positive() {
 			OneOf::Left(&self.decls[sym_ix.0 as usize])
 		} else {
-			OneOf::Right(&self.internal.symbols[sym_ix.0.abs() as usize])
+			OneOf::Right(&self.internal.symbols[sym_ix.0.unsigned_abs() as usize])
 		}
 	}
 
@@ -425,10 +435,6 @@ impl WorkingWorld {
 	}
 
 	pub(crate) fn refresh(&mut self, ctx: WorkContext) {
-		let start_time = Instant::now();
-
-		debug!("Starting a workspace refresh.");
-
 		self.projects = ctx.projects;
 
 		self.extensions = AppendOnlyVec::new();
@@ -452,6 +458,9 @@ impl WorkingWorld {
 				langs::zscript::front1(self, i, project);
 			}
 
+			#[cfg(debug_assertions)]
+			debug!("Finished phase 1 for project: {}", project.root.display());
+
 			// Fill out scopes of global symbols (e.g. class fields, enum variants).
 			// Resolve ZScript and DECORATE inheritance; expand ZScript mixins.
 			ctx.tracker.phase.store(WorkPhase::PostDeclaration);
@@ -460,6 +469,9 @@ impl WorkingWorld {
 				langs::zscript::front2(self, i, project);
 				langs::zscript::extend_classes_and_structs(self, i);
 			}
+
+			#[cfg(debug_assertions)]
+			debug!("Finished phase 2 for project: {}", project.root.display());
 
 			// Defining and checking types.
 			ctx.tracker.phase.store(WorkPhase::Definition);
@@ -471,6 +483,8 @@ impl WorkingWorld {
 				langs::zscript::front3(self, i, project);
 			}
 
+			debug!("Finished refreshing project: {}", project.root.display());
+
 			if (i + 1) == self.projects.len() {
 				break;
 			}
@@ -478,11 +492,6 @@ impl WorkingWorld {
 			let this_g = self.globals[i].get_mut().clone();
 			self.globals.push(RwLock::new(this_g));
 		}
-
-		debug!(
-			"Workspace refresh completed in {}ms.",
-			start_time.elapsed().as_millis()
-		);
 	}
 
 	pub(crate) fn global_scope(&self, project_ix: usize) -> RwLockReadGuard<Scope> {

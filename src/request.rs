@@ -1,5 +1,6 @@
 use std::{fmt::Write, ops::ControlFlow};
 
+use doomfront::{rowan::WalkEvent, LangExt};
 use lsp_server::{
 	Connection, ErrorCode, ExtractError, Request, RequestId, Response, ResponseError,
 };
@@ -7,7 +8,7 @@ use lsp_types::{
 	request::{
 		DocumentSymbolRequest, HoverRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
 	},
-	OneOf, TextDocumentIdentifier,
+	MessageType, OneOf, TextDocumentIdentifier,
 };
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -155,7 +156,7 @@ pub(super) fn handle(
 		}
 
 		tracing::debug!("References in current file's symbol graph:");
-		let mut log = "\r\n".to_string();
+		let mut output = "\r\n".to_string();
 
 		for (key, val) in core.ready.sym_graph.iter() {
 			let SymGraphKey::Reference(sgk) = key else {
@@ -174,16 +175,94 @@ pub(super) fn handle(
 				OneOf::Left(u_sym) => {
 					let crit_span = u_sym.crit_span;
 					let decl = &src.text[crit_span];
-					let _ = writeln!(log, "{:#?} refers to `{}`", crit_span, decl);
+					writeln!(output, "{:#?} refers to `{}`", crit_span, decl).unwrap();
 				}
 				OneOf::Right(in_sym) => {
-					let _ = writeln!(log, "{:#?} refers to `{}`", sgk.span, in_sym.decl);
+					writeln!(output, "{:#?} refers to `{}`", sgk.span, in_sym.decl).unwrap();
 				}
 			}
 		}
 
 		// TODO: would be better if this got emitted as a virtual file.
-		tracing::debug!("{log}");
+		debug!("{output}");
+		util::respond_null(conn, id)
+	})?;
+
+	req = try_request::<DebugTextRequest, _>(req, |id, params| {
+		let path = util::uri_to_pathbuf(&params.text_document.uri)?;
+		let file_id = core.paths.intern(&path);
+
+		let Some((_, project)) = core.project_with(file_id) else {
+			return util::respond_null(conn, id);
+		};
+
+		let src = project.files.get(&file_id).unwrap();
+
+		debug!(
+			"Server-side text of file {}:\r\n{}",
+			path.display(),
+			&src.text
+		);
+
+		util::respond_null(conn, id)
+	})?;
+
+	req = try_request::<DebugAstRequest, _>(req, |id, params| {
+		let path = util::uri_to_pathbuf(&params.text_document.uri)?;
+		let file_id = core.paths.intern_owned(path);
+
+		let Some((_, project)) = core.project_with(file_id) else {
+			return util::respond_null(conn, id);
+		};
+
+		let src = project.files.get(&file_id).unwrap();
+
+		let Some(green) = src.green.as_ref().cloned() else {
+			return util::respond_null(conn, id);
+		};
+
+		#[must_use]
+		fn walk<L: LangExt>(cursor: doomfront::rowan::SyntaxNode<L>) -> String {
+			let mut output = "\r\n".to_string();
+			let mut depth = 0;
+
+			for event in cursor.preorder_with_tokens() {
+				match event {
+					WalkEvent::Enter(elem) => {
+						for _ in 0..depth {
+							output.push_str("    ");
+						}
+
+						writeln!(output, "{elem:?}").unwrap();
+						depth += 1;
+					}
+					WalkEvent::Leave(_) => {
+						depth -= 1;
+					}
+				}
+			}
+
+			output
+		}
+
+		let output = match src.lang {
+			LangId::Unknown => {
+				util::message(
+					conn,
+					"This file's language is unsupported by DoomLS; no AST can be shown."
+						.to_string(),
+					MessageType::INFO,
+				)?;
+
+				return util::respond_null(conn, id);
+			}
+			LangId::CVarInfo => walk(doomfront::zdoom::cvarinfo::SyntaxNode::new_root(green)),
+			LangId::Decorate => walk(doomfront::zdoom::decorate::SyntaxNode::new_root(green)),
+			LangId::ZScript => walk(doomfront::zdoom::zscript::SyntaxNode::new_root(green)),
+		};
+
+		// TODO: would be better if this got emitted as a virtual file.
+		debug!("{output}");
 		util::respond_null(conn, id)
 	})?;
 
@@ -215,6 +294,38 @@ where
 			}
 		},
 	}
+}
+
+#[derive(Debug)]
+enum DebugTextRequest {}
+
+impl lsp_types::request::Request for DebugTextRequest {
+	type Params = DebugTextParams;
+	type Result = ();
+
+	const METHOD: &'static str = "doomls/debugText";
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DebugTextParams {
+	text_document: TextDocumentIdentifier,
+}
+
+#[derive(Debug)]
+enum DebugAstRequest {}
+
+impl lsp_types::request::Request for DebugAstRequest {
+	type Params = DebugAstParams;
+	type Result = ();
+
+	const METHOD: &'static str = "doomls/debugAst";
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DebugAstParams {
+	text_document: TextDocumentIdentifier,
 }
 
 #[derive(Debug)]

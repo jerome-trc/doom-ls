@@ -16,6 +16,8 @@ pub(crate) struct NameIx(u32);
 /// A [`NameIx`] with a namespace discriminant attached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum NsName {
+	/// These names are registered by CVARINFO files and used for linting
+	/// ZScript calls to `CVar.FindCVar` and `CVar.GetCVar`.
 	CVar(NameIx),
 	FlagDef(NameIx),
 	Local(NameIx),
@@ -29,6 +31,7 @@ pub(crate) enum NsName {
 
 impl NsName {
 	#[must_use]
+	#[allow(unused)]
 	fn index(self) -> NameIx {
 		match self {
 			Self::CVar(ix)
@@ -73,7 +76,7 @@ impl NameInterner {
 	}
 
 	#[must_use]
-	pub(crate) fn resolve(&self, ns_name: NsName) -> &str {
+	pub(crate) fn _resolve(&self, ns_name: NsName) -> &str {
 		self.array[ns_name.index().0 as usize].0.text()
 	}
 

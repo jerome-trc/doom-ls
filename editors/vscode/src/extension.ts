@@ -16,6 +16,22 @@ export const symGraph = new lc.RequestType<SymGraphParams, null, void>(
     "doomls/symGraph",
 );
 
+export type DebugAstParams = {
+	textDocument: lc.TextDocumentIdentifier;
+};
+
+export const debugAst = new lc.RequestType<DebugAstParams, null, void>(
+	"doomls/debugAst"
+);
+
+export type DebugTextParams = {
+	textDocument: lc.TextDocumentIdentifier;
+};
+
+export const debugText = new lc.RequestType<DebugTextParams, null, void>(
+	"doomls/debugText"
+);
+
 let client: LanguageClient | null = null;
 
 const channel = vscode.window.createOutputChannel("DoomLS Client")
@@ -36,6 +52,16 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	ctx.subscriptions.push(vscode.commands.registerTextEditorCommand("doomls.symGraph", (textEditor, _edit) => {
 		const params = { textDocument: { uri: textEditor.document.uri.toString() } };
 		client?.sendRequest(symGraph, params);
+	}));
+
+	ctx.subscriptions.push(vscode.commands.registerTextEditorCommand("doomls.debugAst", (textEditor, _edit) => {
+		const params = { textDocument: { uri: textEditor.document.uri.toString() } };
+		client?.sendRequest(debugAst, params);
+	}));
+
+	ctx.subscriptions.push(vscode.commands.registerTextEditorCommand("doomls.debugText", (textEditor, _edit) => {
+		const params = { textDocument: { uri: textEditor.document.uri.toString() } };
+		client?.sendRequest(debugText, params);
 	}));
 
 	const cfg = vscode.workspace.getConfiguration("doomls");

@@ -197,8 +197,8 @@ impl<'w> FrontendContext<'w> {
 		fspan: FileSpan,
 	) -> OneOf<Sender<Scope>, Option<Scope>> {
 		match self.scope_work.entry(fspan) {
-			dashmap::mapref::entry::Entry::Occupied(occ) => match occ.get().recv() {
-				Ok(scope) => return OneOf::Right(Some(scope)),
+			dashmap::mapref::entry::Entry::Occupied(occ) => match occ.get().try_recv() {
+				Ok(scope) => OneOf::Right(Some(scope)),
 				Err(_) => OneOf::Right(self.scopes.get(&fspan).map(|s| s.clone())),
 			},
 			dashmap::mapref::entry::Entry::Vacant(vac) => {

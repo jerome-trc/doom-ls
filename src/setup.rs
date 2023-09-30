@@ -254,7 +254,7 @@ pub(crate) fn core(conn: &Connection, response: Response) -> Result<Core, Error>
 	Ok(core)
 }
 
-fn walk_dir(
+pub(crate) fn walk_dir(
 	core: &mut Core,
 	conn: &Connection,
 	project: &mut Project,

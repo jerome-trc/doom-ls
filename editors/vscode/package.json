@@ -948,6 +948,16 @@
 			"command": "doomls.symGraph",
 			"title": "(DEBUG) Show Symbol Graph",
 			"category": "DoomLS"
+		},
+		{
+			"command": "doomls.debugAst",
+			"title": "(DEBUG) Show Abstract Syntax Tree",
+			"category": "DoomLS"
+		},
+		{
+			"command": "doomls.debugText",
+			"title": "(DEBUG) Show Server-side Text",
+			"category": "DoomLS"
 		}
     ],
 	"semanticTokenTypes": [

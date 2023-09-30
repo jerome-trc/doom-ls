@@ -66,7 +66,11 @@ fn class_function(
 			unreachable!();
 		};
 
-		let proto_def = ctx.get_or_require_def(*proto_ix, |ctx, sym_ix, sym| {
+		let proto_ix = *proto_ix;
+
+		drop(sgn);
+
+		let proto_def = ctx.get_or_require_def(proto_ix, |ctx, sym_ix, sym| {
 			let node = ctx.src.node_covering(sym.id.span);
 			let fndecl = ast::FunctionDecl::cast(node).unwrap();
 			define(ctx, sym_ix, fndecl)

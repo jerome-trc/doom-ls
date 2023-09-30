@@ -14,6 +14,9 @@ pub(crate) mod semtok;
 pub(crate) mod setup;
 pub(crate) mod util;
 
+#[cfg(test)]
+mod test;
+
 use std::{
 	hash::BuildHasherDefault,
 	ops::ControlFlow,
@@ -29,7 +32,7 @@ use lsp_types::{
 	ConfigurationItem, ConfigurationParams, InitializeParams, MessageType, ShowMessageParams,
 };
 use rustc_hash::FxHasher;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use triomphe::Arc;
 
 use core::{Core, WorkContext, WorkTracker};
@@ -140,8 +143,17 @@ fn main_loop(mut core: Core, conn: Connection) -> UnitResult {
 			work_tracker = Some(tracker.clone());
 
 			rayon::spawn(move || {
+				let start_time = Instant::now();
+				debug!("Starting a workspace refresh.");
+
 				let mut guard = working.lock();
 				guard.refresh(WorkContext { tracker, projects });
+				drop(guard);
+
+				debug!(
+					"Workspace refresh completed in {}ms.",
+					start_time.elapsed().as_millis()
+				);
 			});
 		}
 
