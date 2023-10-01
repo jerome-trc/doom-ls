@@ -165,66 +165,7 @@ pub(crate) fn core(conn: &Connection, response: Response) -> Result<Core, Error>
 			zscript: langs::zscript::IncludeTree::default(),
 		};
 
-		let read_dir = std::fs::read_dir(project_path)?;
-
-		for result in read_dir {
-			let Ok(rde) = result else {
-				util::message(
-					conn,
-					format!("Failed to inspect file: {}", project_path.display()),
-					MessageType::WARNING,
-				)?;
-
-				continue;
-			};
-
-			let path = rde.path();
-
-			if path.is_symlink() {
-				continue;
-			} else if path.is_dir() {
-				walk_dir(&mut core, conn, &mut project, path)?;
-				continue;
-			}
-
-			let Some(fstem) = path.file_stem() else {
-				continue;
-			};
-
-			let text = match std::fs::read_to_string(&path) {
-				Ok(t) => t,
-				Err(err) => {
-					if err.kind() != std::io::ErrorKind::InvalidData {
-						util::message(
-							conn,
-							format!("Failed to read file in project: {}", path.display()),
-							MessageType::WARNING,
-						)?;
-					}
-
-					continue;
-				}
-			};
-
-			let file_id = core.paths.intern(&path);
-			let lines = LineIndex::new(&text);
-
-			project.files.insert(
-				file_id,
-				Source {
-					id: file_id,
-					lang: LangId::Unknown,
-					text,
-					lines,
-					green: None,
-				},
-			);
-
-			if fstem.eq_ignore_ascii_case("zscript") {
-				project.zscript.root = Some(file_id);
-			}
-		}
-
+		process_root_dir(&core, conn, &mut project, project_path)?;
 		core.pending.projects.push(project);
 	}
 
@@ -254,8 +195,77 @@ pub(crate) fn core(conn: &Connection, response: Response) -> Result<Core, Error>
 	Ok(core)
 }
 
+fn process_root_dir(
+	core: &Core,
+	conn: &Connection,
+	project: &mut Project,
+	path: &Path,
+) -> Result<(), Error> {
+	let read_dir = std::fs::read_dir(path)?;
+
+	for result in read_dir {
+		let Ok(rde) = result else {
+			util::message(
+				conn,
+				format!("Failed to inspect a file under: {}", path.display()),
+				MessageType::WARNING,
+			)?;
+
+			continue;
+		};
+
+		let path = rde.path();
+
+		if path.is_symlink() {
+			continue;
+		} else if path.is_dir() {
+			walk_dir(core, conn, project, path)?;
+			continue;
+		}
+
+		let Some(fstem) = path.file_stem() else {
+			continue;
+		};
+
+		let text = match std::fs::read_to_string(&path) {
+			Ok(t) => t,
+			Err(err) => {
+				if err.kind() != std::io::ErrorKind::InvalidData {
+					util::message(
+						conn,
+						format!("Failed to read file in project: {}", path.display()),
+						MessageType::WARNING,
+					)?;
+				}
+
+				continue;
+			}
+		};
+
+		let file_id = core.paths.intern(&path);
+		let lines = LineIndex::new(&text);
+
+		project.files.insert(
+			file_id,
+			Source {
+				id: file_id,
+				lang: LangId::Unknown,
+				text,
+				lines,
+				green: None,
+			},
+		);
+
+		if fstem.eq_ignore_ascii_case("zscript") {
+			project.zscript.root = Some(file_id);
+		}
+	}
+
+	Ok(())
+}
+
 pub(crate) fn walk_dir(
-	core: &mut Core,
+	core: &Core,
 	conn: &Connection,
 	project: &mut Project,
 	path: PathBuf,
@@ -313,4 +323,34 @@ pub(crate) fn walk_dir(
 	}
 
 	Ok(())
+}
+
+#[must_use]
+#[cfg(test)]
+pub(crate) fn test_core(conn: &Connection) -> Option<Core> {
+	let Ok(path_str) = std::env::var("DOOMLS_TEST_PROJECT") else {
+		eprintln!("`DOOMLS_TEST_PROJECT` env. var. is not valid.");
+		return None;
+	};
+
+	let path = Path::new(&path_str);
+
+	if !path.exists() {
+		eprintln!("No file or directory at `DOOMLS_TEST_PROJECT` path.");
+		return None;
+	}
+
+	let mut project = Project {
+		root: path.to_owned(),
+		files: FxHamt::default(),
+		zscript: langs::zscript::IncludeTree::default(),
+	};
+
+	let mut core = Core::default();
+	process_root_dir(&core, conn, &mut project, path).unwrap();
+	core.pending.projects.push(project);
+
+	langs::zscript::inctree::walk(&mut core);
+
+	Some(core)
 }
