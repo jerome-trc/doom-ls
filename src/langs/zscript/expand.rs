@@ -15,7 +15,7 @@ use doomfront::{
 	rowan::{ast::AstNode, Language, TextRange},
 	zdoom::zscript::{ast, Syn},
 };
-use lsp_types::{DiagnosticSeverity, OneOf};
+use lsp_types::{DiagnosticRelatedInformation, DiagnosticSeverity, OneOf};
 
 use crate::{
 	core::{Definition, Scope, SymIx, Symbol},
@@ -564,12 +564,12 @@ fn declare_field(ctx: &FrontendContext, holder: SymIx, outer: &mut Scope, ast: a
 }
 
 fn declare_flagdef(ctx: &FrontendContext, holder: SymIx, outer: &mut Scope, ast: ast::FlagDef) {
-	let name_tok = ast.name().unwrap().into();
+	let ident = ast.name().unwrap().into();
 	let crit_span = ast.syntax().text_range();
 
 	let result = ctx.declare(
 		outer,
-		NsName::FlagDef(ctx.names.intern(&name_tok)),
+		NsName::FlagDef(ctx.names.intern(&ident)),
 		LangId::ZScript,
 		ast.syntax(),
 		crit_span,
@@ -580,7 +580,44 @@ fn declare_flagdef(ctx: &FrontendContext, holder: SymIx, outer: &mut Scope, ast:
 			ctx.make_member(ix, holder);
 		}
 		Err(prev) => {
-			decl::redeclare_error(ctx, prev, crit_span, name_tok.text());
+			decl::redeclare_error(ctx, prev, crit_span, ident.text());
+		}
+	};
+
+	let mut varname = format!("b{}", ident.text());
+
+	{
+		let second_char = &mut varname[1..2];
+		second_char.make_ascii_uppercase();
+	}
+
+	// Note that, as of GZDoom 4.10.0, shadowing is silently accepted by the compiler.
+
+	let result = ctx.declare(
+		outer,
+		NsName::Value(ctx.names.intern_str(&varname)),
+		LangId::ZScript,
+		ast.syntax(),
+		crit_span,
+	);
+
+	match result {
+		Ok(ix) => {
+			ctx.make_member(ix, holder);
+		}
+		Err(prev) => {
+			ctx.raise(
+				ctx.src
+					.diag_builder(
+						crit_span,
+						DiagnosticSeverity::ERROR,
+						format!("flagdef's fake boolean `{varname}` shadows a field"),
+					)
+					.with_related(DiagnosticRelatedInformation {
+						location: ctx.location_of(prev).unwrap(),
+						message: "field is declared here".to_string(),
+					}),
+			);
 		}
 	}
 }
