@@ -157,7 +157,7 @@ fn highlight_by_definition(hl: &mut Highlighter, token: SyntaxToken, def: &Defin
 		Definition::ZScript(sema::Datum::Constant) => {
 			hl.advance(SemToken::Constant, token.text_range());
 		}
-		Definition::ZScript(sema::Datum::Field(sema::Field { flags, deprecated })) => {
+		Definition::ZScript(sema::Datum::_Field(sema::Field { flags, deprecated })) => {
 			hl.advance_mod(SemToken::Property, token.text_range(), {
 				let mut stf = SemTokenFlags::MEMBER;
 
@@ -197,7 +197,7 @@ fn highlight_by_definition(hl: &mut Highlighter, token: SyntaxToken, def: &Defin
 				},
 			);
 		}
-		Definition::CVarInfo(_) => {} // TODO
+		Definition::_CVarInfo(_) => {} // TODO
 	}
 }
 

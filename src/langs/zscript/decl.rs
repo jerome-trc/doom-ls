@@ -141,8 +141,10 @@ pub(crate) fn declare_enum(
 		};
 
 		match result {
-			Ok(ix) => if let Some(enum_ix) = enum_ix {
-				ctx.make_member(ix, enum_ix);
+			Ok(ix) => {
+				if let Some(enum_ix) = enum_ix {
+					ctx.make_member(ix, enum_ix);
+				}
 			}
 			Err(prev) => {
 				redeclare_error(ctx, prev, variant.syntax().text_range(), v_ident.text());

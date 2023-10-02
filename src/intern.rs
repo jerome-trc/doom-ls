@@ -18,12 +18,12 @@ pub(crate) struct NameIx(u32);
 pub(crate) enum NsName {
 	/// These names are registered by CVARINFO files and used for linting
 	/// ZScript calls to `CVar.FindCVar` and `CVar.GetCVar`.
-	CVar(NameIx),
+	_CVar(NameIx),
 	FlagDef(NameIx),
-	Local(NameIx),
+	_Local(NameIx),
 	Property(NameIx),
 	/// For pseudo-random number generators declared implicitly by ZScript and DECORATE.
-	Prng(NameIx),
+	_Prng(NameIx),
 	StateLabel(NameIx),
 	Type(NameIx),
 	Value(NameIx),
@@ -34,11 +34,11 @@ impl NsName {
 	#[allow(unused)]
 	fn index(self) -> NameIx {
 		match self {
-			Self::CVar(ix)
+			Self::_CVar(ix)
 			| Self::FlagDef(ix)
-			| Self::Local(ix)
+			| Self::_Local(ix)
 			| Self::Property(ix)
-			| Self::Prng(ix)
+			| Self::_Prng(ix)
 			| Self::StateLabel(ix)
 			| Self::Type(ix)
 			| Self::Value(ix) => ix,

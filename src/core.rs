@@ -707,7 +707,7 @@ impl Symbol {
 
 #[derive(Debug)]
 pub(crate) enum Definition {
-	CVarInfo(langs::cvarinfo::sema::Datum),
+	_CVarInfo(langs::cvarinfo::sema::Datum),
 	ZScript(langs::zscript::sema::Datum),
 }
 

@@ -342,10 +342,7 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 			ctx.raise(ctx.src.diag_builder(
 				ident.text_range(),
 				DiagnosticSeverity::ERROR,
-				format!(
-					"`extend class` not applicable to enum `{}`",
-					ident.text()
-				),
+				format!("`extend class` not applicable to enum `{}`", ident.text()),
 			));
 
 			return;
@@ -354,10 +351,7 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 			ctx.raise(ctx.src.diag_builder(
 				ident.text_range(),
 				DiagnosticSeverity::ERROR,
-				format!(
-					"`extend class` not applicable to struct `{}`",
-					ident.text()
-				),
+				format!("`extend class` not applicable to struct `{}`", ident.text()),
 			));
 
 			return;

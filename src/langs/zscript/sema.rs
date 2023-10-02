@@ -6,7 +6,7 @@ use doomfront::zdoom;
 pub(crate) enum Datum {
 	Class,
 	Constant,
-	Field(Field),
+	_Field(Field),
 	Function(Function),
 }
 
