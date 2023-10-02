@@ -281,16 +281,16 @@ pub(crate) fn declare_mixin_class_innards(
 }
 
 pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
-	let name_tok = ast.name().unwrap().into();
-	let ns_name = NsName::Type(ctx.names.intern(&name_tok));
+	let ident = ast.name().unwrap().into();
+	let ns_name = NsName::Type(ctx.names.intern(&ident));
 
 	let globals = ctx.global_scope(ctx.project_ix);
 
 	let Some(&extended_ix) = globals.get(&ns_name) else {
 		ctx.raise(ctx.src.diag_builder(
-			name_tok.text_range(),
+			ident.text_range(),
 			DiagnosticSeverity::ERROR,
-			format!("class `{}` not found", name_tok.text()),
+			format!("class `{}` not found", ident.text()),
 		));
 
 		return;
@@ -298,7 +298,7 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 
 	drop(globals);
 
-	ctx.make_ref_to(name_tok.text_range(), extended_ix);
+	ctx.make_ref_to(ident.text_range(), extended_ix);
 
 	let sym = match ctx.symbol(extended_ix) {
 		OneOf::Left(u_sym) => u_sym,
@@ -309,11 +309,11 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 			}
 
 			ctx.raise(ctx.src.diag_builder(
-				name_tok.text_range(),
+				ident.text_range(),
 				DiagnosticSeverity::ERROR,
 				format!(
 					"internal symbol `{}` cannot be extended by user code",
-					name_tok.text()
+					ident.text()
 				),
 			));
 
@@ -325,11 +325,11 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 		// Only ZScript and DECORATE symbols can use `NsName::Type`,
 		// so this is the only kind of error that's applicable here.
 		ctx.raise(ctx.src.diag_builder(
-			name_tok.text_range(),
+			ident.text_range(),
 			DiagnosticSeverity::ERROR,
 			format!(
 				"DECORATE class `{}` cannot be extended from ZScript",
-				name_tok.text()
+				ident.text()
 			),
 		));
 
@@ -340,11 +340,11 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 		Syn::ClassDef => {}
 		Syn::EnumDef => {
 			ctx.raise(ctx.src.diag_builder(
-				name_tok.text_range(),
+				ident.text_range(),
 				DiagnosticSeverity::ERROR,
 				format!(
 					"`extend class` not applicable to enum `{}`",
-					name_tok.text()
+					ident.text()
 				),
 			));
 
@@ -352,11 +352,11 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 		}
 		Syn::StructDef => {
 			ctx.raise(ctx.src.diag_builder(
-				name_tok.text_range(),
+				ident.text_range(),
 				DiagnosticSeverity::ERROR,
 				format!(
 					"`extend class` not applicable to struct `{}`",
-					name_tok.text()
+					ident.text()
 				),
 			));
 
@@ -364,11 +364,11 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 		}
 		Syn::MixinClassDef => {
 			ctx.raise(ctx.src.diag_builder(
-				name_tok.text_range(),
+				ident.text_range(),
 				DiagnosticSeverity::ERROR,
 				format!(
 					"`extend class` not applicable to mixin class `{}`",
-					name_tok.text()
+					ident.text()
 				),
 			));
 
@@ -541,8 +541,8 @@ fn expand_mixin(ctx: &FrontendContext, class_ix: SymIx, scope: &mut Scope, ast: 
 
 fn declare_field(ctx: &FrontendContext, holder: SymIx, outer: &mut Scope, ast: ast::FieldDecl) {
 	for var_name in ast.names() {
-		let name_tok = var_name.ident().into();
-		let ns_name = NsName::Value(ctx.names.intern(&name_tok));
+		let ident = var_name.ident().into();
+		let ns_name = NsName::Value(ctx.names.intern(&ident));
 
 		let result = ctx.declare(
 			outer,
@@ -557,7 +557,7 @@ fn declare_field(ctx: &FrontendContext, holder: SymIx, outer: &mut Scope, ast: a
 				ctx.make_member(ix, holder);
 			}
 			Err(prev) => {
-				decl::redeclare_error(ctx, prev, var_name.syntax().text_range(), name_tok.text());
+				decl::redeclare_error(ctx, prev, var_name.syntax().text_range(), ident.text());
 			}
 		}
 	}
@@ -629,8 +629,8 @@ fn declare_function(
 	ast: ast::FunctionDecl,
 	class: bool,
 ) {
-	let name_tok = ast.name().into();
-	let ns_name = NsName::Value(ctx.names.intern(&name_tok));
+	let ident = ast.name().into();
+	let ns_name = NsName::Value(ctx.names.intern(&ident));
 
 	let crit_start = if let Some(qual) = ast.qualifiers().iter().next() {
 		qual.text_range().start()
@@ -662,7 +662,7 @@ fn declare_function(
 					ctx,
 					prev,
 					TextRange::new(crit_start, crit_end),
-					name_tok.text(),
+					ident.text(),
 				);
 			}
 		}

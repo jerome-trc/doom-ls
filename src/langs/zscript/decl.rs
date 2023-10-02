@@ -14,8 +14,8 @@ use crate::{
 };
 
 pub(crate) fn declare_class(ctx: &FrontendContext, ast: ast::ClassDef) {
-	let name_tok = ast.name().unwrap().into();
-	let ns_name = NsName::Type(ctx.names.intern(&name_tok));
+	let ident = ast.name().unwrap().into();
+	let ns_name = NsName::Type(ctx.names.intern(&ident));
 
 	let crit_end = if let Some(qual) = ast.qualifiers().last() {
 		qual.text_range().end()
@@ -40,7 +40,7 @@ pub(crate) fn declare_class(ctx: &FrontendContext, ast: ast::ClassDef) {
 	drop(globals);
 
 	if let Err(prev) = result {
-		redeclare_error(ctx, prev, crit_span, name_tok.text());
+		redeclare_error(ctx, prev, crit_span, ident.text());
 	}
 }
 
@@ -49,8 +49,8 @@ pub(crate) fn declare_constant(
 	outer: Option<&mut Scope>,
 	ast: ast::ConstDef,
 ) {
-	let name_tok = ast.name().unwrap().into();
-	let ns_name = NsName::Value(ctx.names.intern(&name_tok));
+	let ident = ast.name().unwrap().into();
+	let ns_name = NsName::Value(ctx.names.intern(&ident));
 
 	let crit_span = TextRange::new(
 		ast.keyword().text_range().start(),
@@ -58,6 +58,41 @@ pub(crate) fn declare_constant(
 	);
 
 	let result = if let Some(o) = outer {
+		ctx.declare(o, ns_name, LangId::ZScript, ast.syntax(), crit_span)
+	} else {
+		let mut globals = ctx.global_scope_mut(ctx.project_ix);
+
+		ctx.declare(
+			&mut globals,
+			ns_name,
+			LangId::ZScript,
+			ast.syntax(),
+			crit_span,
+		)
+	};
+
+	if let Err(prev) = result {
+		redeclare_error(ctx, prev, crit_span, ident.text());
+	}
+}
+
+pub(crate) fn declare_enum(
+	ctx: &FrontendContext,
+	mut outer: Option<&mut Scope>,
+	ast: ast::EnumDef,
+) {
+	let ident = ast.name().unwrap().into();
+	let ns_name = NsName::Type(ctx.names.intern(&ident));
+
+	let crit_end = if let Some(tspec) = ast.type_spec() {
+		tspec.0.text_range().end()
+	} else {
+		ast.keyword().text_range().end()
+	};
+
+	let crit_span = TextRange::new(ast.keyword().text_range().start(), crit_end);
+
+	let result = if let Some(o) = outer.as_mut() {
 		ctx.declare(o, ns_name, LangId::ZScript, ast.syntax(), crit_span)
 	} else {
 		let mut globals = ctx.global_scope_mut(ctx.project_ix);
@@ -73,22 +108,17 @@ pub(crate) fn declare_constant(
 		r
 	};
 
-	if let Err(prev) = result {
-		redeclare_error(ctx, prev, crit_span, name_tok.text());
-	}
-}
-
-pub(crate) fn declare_enum(
-	ctx: &FrontendContext,
-	mut outer: Option<&mut Scope>,
-	ast: ast::EnumDef,
-) {
-	let name_tok = ast.name().unwrap().into();
-	let ns_name = NsName::Type(ctx.names.intern(&name_tok));
+	let enum_ix = match result {
+		Ok(ix) => Some(ix),
+		Err(prev) => {
+			redeclare_error(ctx, prev, crit_span, ident.text());
+			None
+		}
+	};
 
 	for variant in ast.variants() {
-		let v_name_tok = variant.name().into();
-		let v_ns_name = NsName::Value(ctx.names.intern(&v_name_tok));
+		let v_ident = variant.name().into();
+		let v_ns_name = NsName::Value(ctx.names.intern(&v_ident));
 
 		let result = if let Some(o) = outer.as_mut() {
 			ctx.declare(
@@ -101,58 +131,33 @@ pub(crate) fn declare_enum(
 		} else {
 			let mut globals = ctx.global_scope_mut(ctx.project_ix);
 
-			let r = ctx.declare(
+			ctx.declare(
 				&mut globals,
 				v_ns_name,
 				LangId::ZScript,
 				variant.syntax(),
 				variant.syntax().text_range(),
-			);
-
-			r
+			)
 		};
 
-		if let Err(prev) = result {
-			redeclare_error(ctx, prev, variant.syntax().text_range(), v_name_tok.text());
+		match result {
+			Ok(ix) => if let Some(enum_ix) = enum_ix {
+				ctx.make_member(ix, enum_ix);
+			}
+			Err(prev) => {
+				redeclare_error(ctx, prev, variant.syntax().text_range(), v_ident.text());
+			}
 		}
-	}
-
-	let crit_end = if let Some(tspec) = ast.type_spec() {
-		tspec.0.text_range().end()
-	} else {
-		ast.keyword().text_range().end()
-	};
-
-	let crit_span = TextRange::new(ast.keyword().text_range().start(), crit_end);
-
-	let result = if let Some(o) = outer {
-		ctx.declare(o, ns_name, LangId::ZScript, ast.syntax(), crit_span)
-	} else {
-		let mut globals = ctx.global_scope_mut(ctx.project_ix);
-
-		let r = ctx.declare(
-			&mut globals,
-			ns_name,
-			LangId::ZScript,
-			ast.syntax(),
-			crit_span,
-		);
-
-		r
-	};
-
-	if let Err(prev) = result {
-		redeclare_error(ctx, prev, crit_span, name_tok.text());
 	}
 }
 
 pub(crate) fn declare_mixin_class(ctx: &FrontendContext, ast: ast::MixinClassDef) {
-	let name_tok = ast.name().unwrap().into();
-	let ns_name = NsName::Type(ctx.names.intern(&name_tok));
+	let ident = ast.name().unwrap().into();
+	let ns_name = NsName::Type(ctx.names.intern(&ident));
 
 	let crit_span = TextRange::new(
 		ast.keywords().0.text_range().start(),
-		name_tok.text_range().start(),
+		ident.text_range().start(),
 	);
 
 	let mut globals = ctx.global_scope_mut(ctx.project_ix);
@@ -168,7 +173,7 @@ pub(crate) fn declare_mixin_class(ctx: &FrontendContext, ast: ast::MixinClassDef
 	drop(globals);
 
 	if let Err(prev) = result {
-		redeclare_error(ctx, prev, crit_span, name_tok.text());
+		redeclare_error(ctx, prev, crit_span, ident.text());
 	}
 }
 
@@ -177,8 +182,8 @@ pub(crate) fn declare_static_const(
 	outer: &mut Scope,
 	ast: ast::StaticConstStat,
 ) {
-	let name_tok = ast.name().unwrap().into();
-	let ns_name = NsName::Value(ctx.names.intern(&name_tok));
+	let ident = ast.name().unwrap().into();
+	let ns_name = NsName::Value(ctx.names.intern(&ident));
 
 	let crit_span = TextRange::new(
 		ast.keywords().0.text_range().start(),
@@ -188,7 +193,7 @@ pub(crate) fn declare_static_const(
 	let result = ctx.declare(outer, ns_name, LangId::ZScript, ast.syntax(), crit_span);
 
 	if let Err(prev) = result {
-		redeclare_error(ctx, prev, crit_span, name_tok.text());
+		redeclare_error(ctx, prev, crit_span, ident.text());
 	}
 }
 
@@ -197,8 +202,8 @@ pub(crate) fn declare_struct(
 	outer: Option<&mut Scope>,
 	ast: ast::StructDef,
 ) {
-	let name_tok = ast.name().unwrap().into();
-	let ns_name = NsName::Type(ctx.names.intern(&name_tok));
+	let ident = ast.name().unwrap().into();
+	let ns_name = NsName::Type(ctx.names.intern(&ident));
 
 	let crit_end = if let Some(qual) = ast.qualifiers().last() {
 		qual.text_range().end()
@@ -225,7 +230,7 @@ pub(crate) fn declare_struct(
 	};
 
 	if let Err(prev) = result {
-		redeclare_error(ctx, prev, crit_span, name_tok.text());
+		redeclare_error(ctx, prev, crit_span, ident.text());
 	}
 }
 

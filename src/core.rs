@@ -485,6 +485,7 @@ impl WorkingWorld {
 				langs::zscript::front3(self, i, project);
 			}
 
+			#[cfg(debug_assertions)]
 			debug!("Finished refreshing project: {}", project.root.display());
 
 			if (i + 1) == self.projects.len() {
@@ -515,6 +516,80 @@ impl WorkingWorld {
 			.files
 			.get(&sym.id.file_id)
 			.unwrap()
+	}
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Source {
+	pub(crate) id: PathIx,
+	pub(crate) lang: LangId,
+	pub(crate) text: String,
+	pub(crate) lines: LineIndex,
+	pub(crate) green: Option<GreenNode>,
+}
+
+impl Source {
+	#[must_use]
+	pub(crate) fn make_range(&self, span: TextRange) -> lsp_types::Range {
+		lsp_types::Range {
+			start: lsp_types::Position::from(self.lines.line_col(span.start())),
+			end: lsp_types::Position::from(self.lines.line_col(span.end())),
+		}
+	}
+
+	#[must_use]
+	pub(crate) fn token_at(&self, pos: lsp_types::Position) -> Option<SyntaxToken> {
+		let Some(green) = self.green.as_ref() else {
+			return None;
+		};
+
+		let linecol = LineCol {
+			line: pos.line,
+			col: pos.character,
+		};
+
+		let Some(offs) = self.lines.offset(linecol) else {
+			return None;
+		};
+
+		SyntaxNode::new_root(green.clone())
+			.token_at_offset(offs)
+			.next()
+	}
+
+	#[must_use]
+	pub(crate) fn node_covering<L: LangExt>(
+		&self,
+		span: TextRange,
+	) -> doomfront::rowan::SyntaxNode<L> {
+		let file_node =
+			doomfront::rowan::SyntaxNode::new_root(self.green.as_ref().unwrap().clone());
+		let sym_elem = file_node.covering_element(span);
+
+		match sym_elem {
+			NodeOrToken::Node(n) => n,
+			NodeOrToken::Token(t) => t.parent().unwrap(),
+		}
+	}
+
+	#[must_use]
+	pub(crate) fn diag_builder(
+		&self,
+		span: TextRange,
+		severity: DiagnosticSeverity,
+		message: String,
+	) -> DiagBuilder {
+		DiagBuilder(Diagnostic {
+			range: self.make_range(span),
+			severity: Some(severity),
+			code: None,
+			code_description: None,
+			source: Some("doomls".to_string()),
+			message,
+			related_information: None,
+			tags: None,
+			data: None,
+		})
 	}
 }
 
@@ -606,80 +681,6 @@ impl DefIx {
 	pub(crate) const PENDING: Self = Self(u32::MAX - 1);
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct Source {
-	pub(crate) id: PathIx,
-	pub(crate) lang: LangId,
-	pub(crate) text: String,
-	pub(crate) lines: LineIndex,
-	pub(crate) green: Option<GreenNode>,
-}
-
-impl Source {
-	#[must_use]
-	pub(crate) fn make_range(&self, span: TextRange) -> lsp_types::Range {
-		lsp_types::Range {
-			start: lsp_types::Position::from(self.lines.line_col(span.start())),
-			end: lsp_types::Position::from(self.lines.line_col(span.end())),
-		}
-	}
-
-	#[must_use]
-	pub(crate) fn token_at(&self, pos: lsp_types::Position) -> Option<SyntaxToken> {
-		let Some(green) = self.green.as_ref() else {
-			return None;
-		};
-
-		let linecol = LineCol {
-			line: pos.line,
-			col: pos.character,
-		};
-
-		let Some(offs) = self.lines.offset(linecol) else {
-			return None;
-		};
-
-		SyntaxNode::new_root(green.clone())
-			.token_at_offset(offs)
-			.next()
-	}
-
-	#[must_use]
-	pub(crate) fn node_covering<L: LangExt>(
-		&self,
-		span: TextRange,
-	) -> doomfront::rowan::SyntaxNode<L> {
-		let file_node =
-			doomfront::rowan::SyntaxNode::new_root(self.green.as_ref().unwrap().clone());
-		let sym_elem = file_node.covering_element(span);
-
-		match sym_elem {
-			NodeOrToken::Node(n) => n,
-			NodeOrToken::Token(t) => t.parent().unwrap(),
-		}
-	}
-
-	#[must_use]
-	pub(crate) fn diag_builder(
-		&self,
-		span: TextRange,
-		severity: DiagnosticSeverity,
-		message: String,
-	) -> DiagBuilder {
-		DiagBuilder(Diagnostic {
-			range: self.make_range(span),
-			severity: Some(severity),
-			code: None,
-			code_description: None,
-			source: Some("doomls".to_string()),
-			message,
-			related_information: None,
-			tags: None,
-			data: None,
-		})
-	}
-}
-
 #[derive(Debug)]
 pub(crate) struct Symbol {
 	pub(crate) id: SymbolId,
@@ -741,10 +742,12 @@ pub(crate) enum SymGraphKey {
 	OverrideOf(SymIx),
 
 	/// The value is the symbol referred to by the token at this file-span.
+	/// This span does not necessarily have to map to a token; for example,
+	/// a ZScript string literal may have multiple LANGUAGE ID references in it.
 	Reference(FileSpan),
 	/// The value is a [`SymGraphValue::References`]; all spans referring to this symbol.
 	/// These spans do not necessarily have to each map to a token; for example,
-	/// a string literal may refer to multiple LANGUAGE IDs.
+	/// a ZScript string literal may have multiple LANGUAGE ID references in it.
 	Referred(SymIx),
 }
 
