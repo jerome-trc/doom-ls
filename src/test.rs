@@ -8,6 +8,12 @@ use crate::{
 
 #[test]
 fn refresh() {
+	// Improve clarity of panic messages.
+	rayon::ThreadPoolBuilder::new()
+		.thread_name(|i| format!("doom-ls_global{i}"))
+		.num_threads(1)
+		.build_global().unwrap();
+
 	setup::logging();
 
 	let (conn1, _conn2) = lsp_server::Connection::memory();
