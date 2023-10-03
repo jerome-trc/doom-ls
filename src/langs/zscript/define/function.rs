@@ -1,5 +1,5 @@
 use doomfront::{
-	rowan::{ast::AstNode, Language},
+	rowan::ast::AstNode,
 	zdoom::{
 		self,
 		zscript::{ast, Syn},
@@ -9,28 +9,20 @@ use lsp_types::{DiagnosticRelatedInformation, DiagnosticSeverity};
 use rustc_hash::FxHashMap;
 
 use crate::{
-	core::{DefIx, Definition, SymGraphKey, SymGraphValue, SymIx},
+	arena::Arena,
+	data::{Definition, SymGraphKey, SymPtr},
 	frontend::FrontendContext,
-	langs::zscript::sema::{self, Datum, FunctionFlags},
+	langs::zscript::sema::{self, FunctionFlags},
 };
 
-#[must_use]
-pub(crate) fn define(ctx: &FrontendContext, sym_ix: SymIx, ast: ast::FunctionDecl) -> DefIx {
-	let holder = ctx.holder_of(sym_ix);
-	let holder_syn = Syn::kind_from_raw(holder.syn);
-
-	ctx.make_ref_to(ast.name().text_range(), sym_ix);
-
-	if holder_syn == Syn::MixinClassDef {
-		// TODO: What can reasonably be done about these?
-		return DefIx::PLACEHOLDER;
-	}
-
-	let is_class_member = match holder_syn {
-		Syn::ClassDef => true,
-		Syn::StructDef => false,
-		_ => unreachable!(),
-	};
+pub(crate) fn define(
+	ctx: &FrontendContext,
+	sym_ptr: SymPtr,
+	ast: ast::FunctionDecl,
+	class_member: bool,
+) {
+	let fn_u = sym_ptr.as_user().unwrap();
+	ctx.make_ref_to(ast.name().text_range(), sym_ptr.clone());
 
 	let mut datum = sema::Function {
 		flags: FunctionFlags::empty(),
@@ -40,19 +32,20 @@ pub(crate) fn define(ctx: &FrontendContext, sym_ix: SymIx, ast: ast::FunctionDec
 		deprecated: None,
 	};
 
-	if is_class_member {
-		class_function(ctx, sym_ix, ast, &mut datum);
+	if class_member {
+		class_function(ctx, sym_ptr.clone(), ast, &mut datum);
 	} else {
-		struct_function(ctx, sym_ix, ast, &mut datum);
+		struct_function(ctx, sym_ptr.clone(), ast, &mut datum);
 	}
 
-	let def_ix = ctx.defs.push(Definition::ZScript(Datum::Function(datum)));
-	DefIx(def_ix as u32)
+	let mut bump = ctx.arena.borrow();
+	let def_ptr = Arena::alloc(&mut bump, Definition::ZScript(sema::Datum::Function(datum)));
+	fn_u.def.store(def_ptr.as_ptr().unwrap());
 }
 
 fn class_function(
 	ctx: &FrontendContext,
-	sym_ix: SymIx,
+	sym_ptr: SymPtr,
 	ast: ast::FunctionDecl,
 	datum: &mut sema::Function,
 ) {
@@ -60,35 +53,21 @@ fn class_function(
 	let qualset = set_of_qualifiers(ctx, &quals);
 
 	process_scope_qualifiers(ctx, &quals, &qualset, datum);
+	process_static_and_const(ctx, &ast, &qualset, datum);
 
-	if let Some(sgn) = ctx.sym_graph.get(&SymGraphKey::PrototypeFor(sym_ix)) {
-		let SymGraphValue::Symbol(proto_ix) = sgn.value() else {
-			unreachable!();
-		};
-
-		let proto_ix = *proto_ix;
-
+	// TODO
+	if let Some(sgn) = ctx.sym_graph.get(&SymGraphKey::PrototypeFor(sym_ptr)) {
+		let _ = sgn.as_symbol().unwrap();
 		drop(sgn);
-
-		let proto_def = ctx.get_or_require_def(proto_ix, |ctx, sym_ix, sym| {
-			let node = ctx.src.node_covering(sym.id.span);
-			let fndecl = ast::FunctionDecl::cast(node).unwrap();
-			define(ctx, sym_ix, fndecl)
-		});
-
-		let Definition::ZScript(Datum::Function { .. }) = proto_def else {
-			unreachable!()
-		};
 	} else {
 		// This function isn't overriding anything.
 		// Does it have invalid qualifiers?
-		// TODO: handle `static` qualifier.
 	}
 }
 
 fn struct_function(
 	ctx: &FrontendContext,
-	_: SymIx,
+	_: SymPtr,
 	ast: ast::FunctionDecl,
 	datum: &mut sema::Function,
 ) {
@@ -96,23 +75,7 @@ fn struct_function(
 	let qualset = set_of_qualifiers(ctx, &quals);
 
 	process_scope_qualifiers(ctx, &quals, &qualset, datum);
-
-	match (qualset.get(&Syn::KwStatic), ast.const_keyword()) {
-		(None, None) => {}
-		(None, Some(_const_kw)) => {
-			datum.flags.insert(FunctionFlags::CONST);
-		}
-		(Some(_static_kw), None) => {
-			datum.flags.insert(FunctionFlags::STATIC);
-		}
-		(Some(_), Some(const_kw)) => {
-			ctx.raise(ctx.src.diag_builder(
-				const_kw.text_range(),
-				DiagnosticSeverity::ERROR,
-				"`static` functions cannot be marked `const`".to_string(),
-			));
-		}
-	}
+	process_static_and_const(ctx, &ast, &qualset, datum);
 
 	match (qualset.get(&Syn::KwProtected), qualset.get(&Syn::KwPrivate)) {
 		(None, None) => {}
@@ -285,6 +248,30 @@ fn process_scope_qualifiers(
 				quals.syntax().text_range(),
 				DiagnosticSeverity::ERROR,
 				"different scope qualifiers cannot be combined".to_string(),
+			));
+		}
+	}
+}
+
+fn process_static_and_const(
+	ctx: &FrontendContext,
+	ast: &ast::FunctionDecl,
+	qualset: &FxHashMap<Syn, ast::MemberQual>,
+	datum: &mut sema::Function,
+) {
+	match (qualset.get(&Syn::KwStatic), ast.const_keyword()) {
+		(None, None) => {}
+		(None, Some(_const_kw)) => {
+			datum.flags.insert(FunctionFlags::CONST);
+		}
+		(Some(_static_kw), None) => {
+			datum.flags.insert(FunctionFlags::STATIC);
+		}
+		(Some(_), Some(const_kw)) => {
+			ctx.raise(ctx.src.diag_builder(
+				const_kw.text_range(),
+				DiagnosticSeverity::ERROR,
+				"`static` functions cannot be marked `const`".to_string(),
 			));
 		}
 	}

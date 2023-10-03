@@ -2,19 +2,21 @@ use std::{fmt::Write, ops::ControlFlow};
 
 use doomfront::{rowan::WalkEvent, LangExt};
 use lsp_server::{
-	Connection, ErrorCode, ExtractError, Request, RequestId, Response, ResponseError,
+	Connection, ErrorCode, ExtractError, Message, Request, RequestId, Response, ResponseError,
 };
 use lsp_types::{
 	request::{
 		DocumentSymbolRequest, HoverRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
+		WorkspaceSymbolRequest,
 	},
-	MessageType, OneOf, TextDocumentIdentifier,
+	MessageType, SymbolInformation, TextDocumentIdentifier, WorkspaceSymbolResponse,
 };
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::{
-	core::{Project, Source, SymGraphKey, SymGraphValue},
+	core::{Project, Source},
+	data::{SymGraphKey, SymGraphVal, Symbol},
 	langs::{self, LangId},
 	util, Core, Error, UnitResult,
 };
@@ -141,6 +143,45 @@ pub(super) fn handle(
 		}
 	})?;
 
+	req = try_request::<WorkspaceSymbolRequest, _>(req, |id, params| {
+		let mut sym_info = vec![];
+
+		for sym_ptr in core.ready.symbols.values() {
+			let Some(u_sym) = sym_ptr.as_user() else {
+				continue;
+			};
+
+			let name = core.names.resolve(u_sym.name);
+
+			// TODO: algorithm and threshold(s) will require tuning.
+			if strsim::levenshtein(&params.query, name) < 16 {
+				let src = core.ready.projects[u_sym.project as usize]
+					.files
+					.get(&u_sym.id.file_id)
+					.unwrap();
+
+				#[allow(deprecated)]
+				sym_info.push(SymbolInformation {
+					name: name.to_owned(),
+					kind: u_sym.lsp_kind(),
+					tags: None, // TODO: deprecation
+					deprecated: None,
+					location: core.make_location(src, u_sym.id.span),
+					container_name: None, // TODO
+				});
+			}
+		}
+
+		let resp = WorkspaceSymbolResponse::Flat(sym_info);
+
+		conn.sender.send(Message::Response(Response {
+			id,
+			result: Some(serde_json::to_value(resp).unwrap()),
+			error: None,
+		}))?;
+		Ok(())
+	})?;
+
 	req = try_request::<DebugSymGraphRequest, _>(req, |id, params| {
 		let path = util::uri_to_pathbuf(&params.text_document.uri)?;
 		let file_id = core.paths.intern_owned(path);
@@ -158,18 +199,24 @@ pub(super) fn handle(
 		tracing::debug!("Definitions and references in current file's symbol graph:");
 		let mut output = "\r\n".to_string();
 
-		for sym in core.ready.decls.iter() {
-			if sym.id.file_id != file_id {
-				continue;
-			}
-
-			let Some(def_ix) = sym.definition() else {
+		for (_, val) in core.ready.symbols.iter() {
+			let Some(sym_ptr) = val.as_ref() else {
 				continue;
 			};
 
-			let def = core.ready.definition(def_ix);
+			let Some(u_sym) = sym_ptr.as_user() else {
+				continue;
+			};
 
-			writeln!(output, "{:?}: {def:#?}", sym.id.span).unwrap();
+			if u_sym.id.file_id != file_id {
+				continue;
+			}
+
+			let Some(def_ptr) = u_sym.definition() else {
+				continue;
+			};
+
+			writeln!(output, "{:?}: {def_ptr:#?}", u_sym.id.span).unwrap();
 		}
 
 		writeln!(output).unwrap();
@@ -183,18 +230,25 @@ pub(super) fn handle(
 				continue;
 			}
 
-			let SymGraphValue::Symbol(sym_ix) = val else {
+			let SymGraphVal::Symbol(sym_ptr) = val else {
 				unreachable!()
 			};
 
-			match core.ready.symbol(*sym_ix) {
-				OneOf::Left(u_sym) => {
-					let (_, sym_project) = core.project_with(u_sym.id.file_id).unwrap();
-					let sym_src = sym_project.files.get(&u_sym.id.file_id).unwrap();
-					let decl = &sym_src.text[u_sym.crit_span];
-					writeln!(output, "{:#?} refers to `{}`", sgk.span, decl).unwrap();
+			match sym_ptr.as_ref().unwrap() {
+				Symbol::User(u_sym) => {
+					if let Some(t) = core.decl_text(sym_ptr, u_sym) {
+						writeln!(output, "{:#?} refers to `{t}`", sgk.span,).unwrap();
+					} else {
+						writeln!(
+							output,
+							"{:#?} refers to `{}` (undefined/malformed)",
+							sgk.span,
+							core.names.resolve(u_sym.name)
+						)
+						.unwrap();
+					}
 				}
-				OneOf::Right(in_sym) => {
+				Symbol::Internal(in_sym) => {
 					writeln!(output, "{:#?} refers to `{}`", sgk.span, in_sym.decl).unwrap();
 				}
 			}

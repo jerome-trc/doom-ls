@@ -1,11 +1,17 @@
-use crossbeam::{atomic::AtomicCell, channel::Sender, utils::Backoff};
-use doomfront::{rowan::TextRange, LangExt};
-use lsp_types::{Location, OneOf, Url};
+//! See [`FrontendContext`].
+
+use doomfront::{
+	rowan::{SyntaxNode, TextRange},
+	LangExt,
+};
+use lsp_types::{Location, Url};
 
 use crate::{
-	core::{
-		DefIx, Definition, FileSpan, Scope, Source, SymGraphKey, SymGraphValue, SymIx, Symbol,
-		SymbolId, WorkingWorld,
+	arena::Arena,
+	core::{Scope, Source, WorkingWorld},
+	data::{
+		DefPtr, FileSpan, ScopePtr, SymGraphKey, SymGraphRef, SymGraphVal, SymPtr, Symbol,
+		SymbolId, UserSymbol,
 	},
 	intern::NsName,
 	langs::LangId,
@@ -21,42 +27,58 @@ pub(crate) struct FrontendContext<'w> {
 }
 
 impl<'w> FrontendContext<'w> {
-	/// `Ok` contains the index of the newly-declared symbol.
-	/// `Err` contains the index of the symbol that would have been overwritten.
+	/// `Ok` contains a pointer to the newly-declared symbol.
+	/// `Err` contains a pointer to the symbol that would have been overwritten.
+	pub(crate) fn declare_and<L: LangExt>(
+		&self,
+		outer: &mut Scope,
+		ns_name: NsName,
+		lang: LangId,
+		node: &doomfront::rowan::SyntaxNode<L>,
+		mut pre_insert: impl FnMut(&SymPtr),
+	) -> Result<SymPtr, SymPtr> {
+		let id = SymbolId(FileSpan {
+			file_id: self.src.id,
+			span: node.text_range(),
+		});
+
+		let sym_ptr = match outer.entry(ns_name) {
+			im::hashmap::Entry::Vacant(vac) => {
+				let sym = Symbol::User(UserSymbol {
+					id,
+					project: self.project_ix as u8,
+					lang,
+					syn: L::kind_to_raw(node.kind()),
+					name: ns_name,
+					scope: ScopePtr::null(),
+					def: DefPtr::null(),
+				});
+
+				let mut bump = self.arena.borrow();
+				let sym_ptr = Arena::alloc(&mut bump, sym);
+				pre_insert(&sym_ptr);
+				self.symbols.insert(id, sym_ptr.clone());
+				vac.insert(sym_ptr.clone());
+				sym_ptr
+			}
+			im::hashmap::Entry::Occupied(occ) => {
+				return Err(occ.get().clone());
+			}
+		};
+
+		Ok(sym_ptr)
+	}
+
+	/// `Ok` contains a pointer to the newly-declared symbol.
+	/// `Err` contains a pointer to the symbol that would have been overwritten.
 	pub(crate) fn declare<L: LangExt>(
 		&self,
 		outer: &mut Scope,
 		ns_name: NsName,
 		lang: LangId,
 		node: &doomfront::rowan::SyntaxNode<L>,
-		crit_span: TextRange,
-	) -> Result<SymIx, SymIx> {
-		let id = SymbolId(FileSpan {
-			file_id: self.src.id,
-			span: node.text_range(),
-		});
-
-		let sym_ix = match outer.entry(ns_name) {
-			im::hashmap::Entry::Vacant(vac) => {
-				let ix = self.decls.push(Symbol {
-					id,
-					syn: L::kind_to_raw(node.kind()),
-					lang,
-					project: self.project_ix as u8,
-					crit_span,
-					def: AtomicCell::new(DefIx::PLACEHOLDER),
-				});
-
-				let sym_ix = SymIx(ix as i32);
-				vac.insert(sym_ix);
-				sym_ix
-			}
-			im::hashmap::Entry::Occupied(occ) => {
-				return Err(*occ.get());
-			}
-		};
-
-		Ok(sym_ix)
+	) -> Result<SymPtr, SymPtr> {
+		self.declare_and(outer, ns_name, lang, node, |_| {})
 	}
 
 	/// A returned `Some` contains the index of the overriden symbol.
@@ -66,230 +88,166 @@ impl<'w> FrontendContext<'w> {
 		ns_name: NsName,
 		lang: LangId,
 		node: &doomfront::rowan::SyntaxNode<L>,
-		crit_span: TextRange,
-	) -> (SymIx, Option<SymIx>) {
+	) -> (SymPtr, Option<SymPtr>) {
 		let id = SymbolId(FileSpan {
 			file_id: self.src.id,
 			span: node.text_range(),
 		});
 
-		let ix = self.decls.push(Symbol {
+		let sym = Symbol::User(UserSymbol {
 			id,
-			syn: L::kind_to_raw(node.kind()),
-			lang,
 			project: self.project_ix as u8,
-			crit_span,
-			def: AtomicCell::new(DefIx::PLACEHOLDER),
+			lang,
+			syn: L::kind_to_raw(node.kind()),
+			name: ns_name,
+			scope: ScopePtr::null(),
+			def: DefPtr::null(),
 		});
 
-		let sym_ix = SymIx(ix as i32);
-		(sym_ix, outer.insert(ns_name, sym_ix))
+		let mut bump = self.arena.borrow();
+		let sym_ptr = Arena::alloc(&mut bump, sym);
+
+		self.symbols.insert(id, sym_ptr.clone());
+
+		(sym_ptr.clone(), outer.insert(ns_name, sym_ptr))
 	}
 
-	pub(crate) fn make_member(&self, member: SymIx, holder: SymIx) {
-		self.sym_graph
-			.insert(SymGraphKey::Holder(member), SymGraphValue::Symbol(holder));
+	#[must_use]
+	pub(crate) fn get_symbol(&self, src: &Source, span: TextRange) -> Option<SymPtr> {
+		self.symbols
+			.get(&SymbolId(FileSpan {
+				file_id: src.id,
+				span,
+			}))
+			.map(|r| r.value().clone())
+	}
+
+	pub(crate) fn make_member(&self, member: SymPtr, holder: SymPtr) {
+		self.sym_graph.insert(
+			SymGraphKey::Holder(member.clone()),
+			SymGraphVal::Symbol(holder.clone()),
+		);
 
 		let mut refmut = self
 			.sym_graph
 			.entry(SymGraphKey::Members(holder))
-			.or_insert(SymGraphValue::Symbols(vec![]));
+			.or_insert(SymGraphVal::Symbols(vec![]));
 
-		let SymGraphValue::Symbols(members) = refmut.value_mut() else {
+		let SymGraphVal::Symbols(members) = refmut.value_mut() else {
 			unreachable!()
 		};
 
 		members.push(member);
 	}
 
-	pub(crate) fn make_ref_to(&self, span: TextRange, sym_ix: SymIx) {
+	pub(crate) fn make_ref_to(&self, span: TextRange, sym_ptr: SymPtr) {
 		let fspan = FileSpan {
 			file_id: self.src.id,
 			span,
 		};
 
-		self.sym_graph
-			.insert(SymGraphKey::Reference(fspan), SymGraphValue::Symbol(sym_ix));
+		self.sym_graph.insert(
+			SymGraphKey::Reference(fspan),
+			SymGraphVal::Symbol(sym_ptr.clone()),
+		);
 
 		let mut sgn = self
 			.sym_graph
-			.entry(SymGraphKey::Referred(sym_ix))
-			.or_insert(SymGraphValue::References(vec![]));
+			.entry(SymGraphKey::Referred(sym_ptr))
+			.or_insert(SymGraphVal::References(vec![]));
 
-		let SymGraphValue::References(refs) = sgn.value_mut() else {
+		let SymGraphVal::References(refs) = sgn.value_mut() else {
 			unreachable!();
 		};
 
 		refs.push(fspan);
 	}
 
-	pub(crate) fn make_child_of(&self, parent_ix: SymIx, child_ix: SymIx) {
+	pub(crate) fn make_child_of(&self, parent_ptr: SymPtr, child_ptr: SymPtr) {
 		self.sym_graph.insert(
-			SymGraphKey::ParentOf(child_ix),
-			SymGraphValue::Symbol(parent_ix),
+			SymGraphKey::ParentOf(child_ptr.clone()),
+			SymGraphVal::Symbol(parent_ptr.clone()),
 		);
 
 		let mut sgn = self
 			.sym_graph
-			.entry(SymGraphKey::ChildrenOf(parent_ix))
-			.or_insert(SymGraphValue::Symbols(vec![]));
+			.entry(SymGraphKey::ChildrenOf(parent_ptr))
+			.or_insert(SymGraphVal::Symbols(vec![]));
 
-		let SymGraphValue::Symbols(children) = sgn.value_mut() else {
+		let SymGraphVal::Symbols(children) = sgn.value_mut() else {
 			unreachable!();
 		};
 
-		children.push(child_ix);
+		children.push(child_ptr);
 	}
 
-	pub(crate) fn make_override_of(&self, prototype_ix: SymIx, override_ix: SymIx) {
+	pub(crate) fn make_override_of(&self, prototype_ptr: SymPtr, override_ptr: SymPtr) {
 		self.sym_graph.insert(
-			SymGraphKey::PrototypeFor(override_ix),
-			SymGraphValue::Symbol(prototype_ix),
+			SymGraphKey::PrototypeFor(override_ptr.clone()),
+			SymGraphVal::Symbol(prototype_ptr.clone()),
 		);
 
 		let mut sgn = self
 			.sym_graph
-			.entry(SymGraphKey::OverrideOf(prototype_ix))
-			.or_insert(SymGraphValue::Symbols(vec![]));
+			.entry(SymGraphKey::OverrideOf(prototype_ptr))
+			.or_insert(SymGraphVal::Symbols(vec![]));
 
-		let SymGraphValue::Symbols(overrides) = sgn.value_mut() else {
+		let SymGraphVal::Symbols(overrides) = sgn.value_mut() else {
 			unreachable!();
 		};
 
-		overrides.push(override_ix);
+		overrides.push(override_ptr);
 	}
 
 	/// Returns `Err` if `mixin_ix` has already been expanded into `class_ix`.
-	pub(crate) fn make_mixin(&self, class_ix: SymIx, mixin_ix: SymIx) -> Result<(), ()> {
+	pub(crate) fn make_mixin(&self, class_ptr: SymPtr, mixin_ptr: SymPtr) -> Result<(), ()> {
 		let mut sgn = self
 			.sym_graph
-			.entry(SymGraphKey::Mixins(class_ix))
-			.or_insert(SymGraphValue::Symbols(vec![]));
+			.entry(SymGraphKey::Mixins(class_ptr.clone()))
+			.or_insert(SymGraphVal::Symbols(vec![]));
 
-		let SymGraphValue::Symbols(mixins) = sgn.value_mut() else {
+		let SymGraphVal::Symbols(mixins) = sgn.value_mut() else {
 			unreachable!();
 		};
 
-		if mixins.contains(&mixin_ix) {
+		if mixins.contains(&mixin_ptr) {
 			return Err(());
 		}
 
-		mixins.push(mixin_ix);
+		mixins.push(mixin_ptr.clone());
 
 		drop(sgn);
 
 		let mut sgn = self
 			.sym_graph
-			.entry(SymGraphKey::MixinRefs(mixin_ix))
-			.or_insert(SymGraphValue::Symbols(vec![]));
+			.entry(SymGraphKey::MixinRefs(mixin_ptr))
+			.or_insert(SymGraphVal::Symbols(vec![]));
 
-		let SymGraphValue::Symbols(classes) = sgn.value_mut() else {
+		let SymGraphVal::Symbols(classes) = sgn.value_mut() else {
 			unreachable!();
 		};
 
-		classes.push(class_ix);
+		classes.push(class_ptr);
+
 		Ok(())
 	}
 
 	#[must_use]
-	pub(crate) fn get_scope_or_sender(
-		&self,
-		fspan: FileSpan,
-	) -> OneOf<Sender<Scope>, Option<Scope>> {
-		match self.scope_work.entry(fspan) {
-			dashmap::mapref::entry::Entry::Occupied(occ) => match occ.get().try_recv() {
-				Ok(scope) => OneOf::Right(Some(scope)),
-				Err(_) => OneOf::Right(self.scopes.get(&fspan).map(|s| s.clone())),
-			},
-			dashmap::mapref::entry::Entry::Vacant(vac) => {
-				let (sender, receiver) = crossbeam::channel::bounded(0);
-				vac.insert(receiver);
-				OneOf::Left(sender)
-			}
-		}
-	}
-
-	#[must_use]
-	pub(crate) fn parent_of(&self, child_ix: SymIx) -> Option<SymIx> {
-		let Some(sgn) = self.sym_graph.get(&SymGraphKey::ParentOf(child_ix)) else {
+	pub(crate) fn parent_of(&self, child: SymPtr) -> Option<SymGraphRef> {
+		let Some(sgn) = self.sym_graph.get(&SymGraphKey::ParentOf(child)) else {
 			return None;
 		};
 
-		let SymGraphValue::Symbol(proto_ix) = sgn.value() else {
-			unreachable!();
-		};
-
-		Some(*proto_ix)
+		Some(sgn)
 	}
 
 	#[must_use]
-	pub(crate) fn holder_of(&self, member_ix: SymIx) -> &Symbol {
-		let sgn = self.sym_graph.get(&SymGraphKey::Holder(member_ix)).unwrap();
-
-		let SymGraphValue::Symbol(proto_ix) = sgn.value() else {
-			unreachable!();
+	pub(crate) fn _holder_of(&self, member: SymPtr) -> Option<SymGraphRef> {
+		let Some(sgn) = self.sym_graph.get(&SymGraphKey::Holder(member)) else {
+			return None;
 		};
 
-		let OneOf::Left(u_sym) = self.symbol(*proto_ix) else {
-			unreachable!()
-		};
-
-		u_sym
-	}
-
-	/// If `sym` is defined, this is an atomic CEX and a load. No state is changed.
-	/// If `sym` is pending a definition, use exponential backoff to wait until
-	/// the other thread has finished that definition.
-	/// If `sym` is undefined, provide a definition for it.
-	#[must_use]
-	pub(crate) fn require_sym(
-		&'w self,
-		sym_ix: SymIx,
-		sym: &Symbol,
-		callback: fn(&FrontendContext, SymIx, &Symbol) -> DefIx,
-	) -> DefIx {
-		if sym
-			.def
-			.compare_exchange(DefIx::PLACEHOLDER, DefIx::PENDING)
-			.is_ok()
-		{
-			let src = self.file_with(sym);
-
-			let new_ctx: FrontendContext = Self {
-				project_ix: sym.project as usize,
-				src,
-				..*self
-			};
-
-			let ix = callback(&new_ctx, sym_ix, sym);
-			sym.def.store(ix);
-			return ix;
-		}
-
-		let backoff = Backoff::new();
-		let mut status = sym.def.load();
-
-		while status == DefIx::PENDING {
-			backoff.snooze();
-			status = sym.def.load();
-		}
-
-		status
-	}
-
-	#[must_use]
-	pub(crate) fn get_or_require_def(
-		&self,
-		ix: SymIx,
-		callback: fn(&FrontendContext, SymIx, &Symbol) -> DefIx,
-	) -> &Definition {
-		match self.symbol(ix) {
-			OneOf::Left(u_sym) => {
-				let def_ix = self.require_sym(ix, u_sym, callback);
-				&self.defs[def_ix.0 as usize]
-			}
-			OneOf::Right(in_sym) => &in_sym.def,
-		}
+		Some(sgn)
 	}
 
 	#[must_use]
@@ -300,15 +258,20 @@ impl<'w> FrontendContext<'w> {
 		}
 	}
 
-	/// Returns `None` if `sym_ix` points to an internal symbol.
+	/// A symbol's "critical span" is the part of its source that's important to serving diagnostics.
+	///
+	/// For example, a ZScript function definition's critical span starts at its
+	/// first qualifier keyword or return type token and ends at the closing
+	/// parenthesis of its parameter list or `const` keyword.
 	#[must_use]
-	pub(crate) fn location_of(&self, sym_ix: SymIx) -> Option<Location> {
-		let OneOf::Left(sym) = self.symbol(sym_ix) else {
-			return None;
-		};
-
-		let src = self.file_with(sym);
-		Some(self.make_location(src, sym.crit_span))
+	pub(crate) fn diag_location<L: LangExt>(
+		&self,
+		u_sym: &UserSymbol,
+		crit_span: fn(&SyntaxNode<L>) -> TextRange,
+	) -> Location {
+		let src = self.file_with(u_sym);
+		let node = src.node_covering(u_sym.id.span);
+		self.make_location(src, crit_span(&node))
 	}
 
 	pub(crate) fn raise(&self, builder: DiagBuilder) {

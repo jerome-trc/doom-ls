@@ -1,22 +1,23 @@
+//! [`Core`], [`Project`], [`ReadyWorld`], [`PendingWorld`], [`WorkingWorld`], related.
+
 use std::{
-	hash::BuildHasherDefault,
+	hash::{BuildHasherDefault, Hash},
 	path::{Path, PathBuf},
 	time::Instant,
 };
 
-use append_only_vec::AppendOnlyVec;
-use crossbeam::{atomic::AtomicCell, channel::Receiver};
+use crossbeam::atomic::AtomicCell;
 use doomfront::{
 	rowan::{
 		cursor::{SyntaxNode, SyntaxToken},
-		GreenNode, NodeOrToken, SyntaxKind, TextRange,
+		GreenNode, NodeOrToken, TextRange,
 	},
 	zdoom, LangExt,
 };
 use lsp_server::{Connection, Message, Notification};
 use lsp_types::{
 	notification::PublishDiagnostics, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
-	OneOf, PublishDiagnosticsParams, Url,
+	Location, PublishDiagnosticsParams, Url,
 };
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rustc_hash::{FxHashMap, FxHasher};
@@ -24,6 +25,11 @@ use tracing::{debug, error};
 use triomphe::Arc;
 
 use crate::{
+	arena::Arena,
+	data::{
+		Definition, FileSpan, InternalDb, ScopePtr, SymGraphKey, SymGraphVal, SymPtr, SymbolId,
+		UserSymbol,
+	},
 	intern::{NameInterner, NsName, PathInterner, PathIx},
 	langs::{self, LangId},
 	lines::{self, LineCol, LineIndex},
@@ -34,6 +40,7 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct Core {
 	pub(crate) paths: Arc<PathInterner>,
+	pub(crate) names: Arc<NameInterner>,
 	pub(crate) ready: ReadyWorld,
 	pub(crate) pending: PendingWorld,
 	pub(crate) working: Arc<Mutex<WorkingWorld>>,
@@ -91,6 +98,33 @@ impl Core {
 		}
 
 		None
+	}
+
+	#[must_use]
+	pub(crate) fn file_with(&self, sym: &UserSymbol) -> &Source {
+		self.ready.projects[sym.project as usize]
+			.files
+			.get(&sym.id.file_id)
+			.unwrap()
+	}
+
+	#[must_use]
+	pub(crate) fn decl_text(&self, sym_ptr: &SymPtr, u_sym: &UserSymbol) -> Option<String> {
+		match u_sym.def.as_ref() {
+			None => None,
+			Some(Definition::ZScript(datum)) => {
+				Some(langs::zscript::decl_text(self, sym_ptr, u_sym, datum))
+			}
+			Some(Definition::_CVarInfo(_)) => unimplemented!(),
+		}
+	}
+
+	#[must_use]
+	pub(crate) fn make_location(&self, src: &Source, span: TextRange) -> Location {
+		Location {
+			uri: Url::from_file_path(self.paths.resolve(src.id)).unwrap(),
+			range: src.make_range(span),
+		}
 	}
 
 	pub(crate) fn reparse_dirty(&mut self, conn: &Connection) {
@@ -212,34 +246,30 @@ impl Core {
 
 		debug!("Updating ready world.");
 
+		std::mem::swap(&mut self.ready.arena, &mut working.arena);
+
 		self.ready.globals.clear();
 		self.ready.projects = std::mem::take(&mut working.projects);
-		self.ready.decls = std::mem::replace(&mut working.decls, AppendOnlyVec::new());
-		self.ready.defs = std::mem::replace(&mut working.defs, AppendOnlyVec::new());
 
 		for rwlock in working.globals.drain(..) {
 			self.ready.globals.push(rwlock.into_inner());
 		}
 
+		fn swap_dashmap_with_readonly<K, V>(
+			ready: &mut FxDashView<K, V>,
+			working: &mut FxDashMap<K, V>,
+		) where
+			K: Eq + Hash + Clone,
 		{
-			let mut sym_graph = std::mem::replace(
-				&mut self.ready.sym_graph,
-				FxDashMap::default().into_read_only(),
-			)
-			.into_inner();
-			std::mem::swap(&mut sym_graph, &mut working.sym_graph);
-			self.ready.sym_graph = sym_graph.into_read_only();
+			let mut temp =
+				std::mem::replace(ready, FxDashMap::default().into_read_only()).into_inner();
+			std::mem::swap(&mut temp, working);
+			*ready = temp.into_read_only();
 		}
 
-		{
-			let mut scopes = std::mem::replace(
-				&mut self.ready.scopes,
-				FxDashMap::default().into_read_only(),
-			)
-			.into_inner();
-			std::mem::swap(&mut scopes, &mut working.scopes);
-			self.ready.scopes = scopes.into_read_only();
-		}
+		swap_dashmap_with_readonly(&mut self.ready.sym_graph, &mut working.sym_graph);
+		swap_dashmap_with_readonly(&mut self.ready.symbols, &mut working.symbols);
+		swap_dashmap_with_readonly(&mut self.ready.scopes, &mut working.scopes);
 
 		let diags = std::mem::take(&mut working.diags);
 
@@ -270,18 +300,19 @@ impl Core {
 
 impl Default for Core {
 	fn default() -> Self {
-		let names = NameInterner::default();
+		let names = Arc::new(NameInterner::default());
 		let paths = Arc::new(PathInterner::default());
 		let internal = Arc::new(InternalDb::new(&names));
 
 		Self {
 			paths: paths.clone(),
+			names: names.clone(),
 			ready: ReadyWorld {
+				arena: Arena::default(),
 				projects: vec![],
-				decls: AppendOnlyVec::new(),
 				globals: vec![],
+				symbols: FxDashMap::default().into_read_only(),
 				scopes: FxDashMap::default().into_read_only(),
-				defs: AppendOnlyVec::new(),
 				sym_graph: FxDashMap::default().into_read_only(),
 				internal: internal.clone(),
 			},
@@ -293,97 +324,36 @@ impl Default for Core {
 				sema_invalid: true,
 			},
 			working: Arc::new(Mutex::new(WorkingWorld {
+				arena: Arena::default(),
 				paths,
 				names,
 				internal,
 				projects: vec![],
-				scope_work: FxDashMap::default(),
-				extensions: AppendOnlyVec::new(),
-				decls: AppendOnlyVec::new(),
-				defs: AppendOnlyVec::new(),
+
 				globals: vec![],
+				diags: FxDashMap::default(),
+				symbols: FxDashMap::default(),
 				scopes: FxDashMap::default(),
 				sym_graph: FxDashMap::default(),
-				diags: FxDashMap::default(),
 			})),
 		}
 	}
 }
 
 #[derive(Debug)]
-pub(crate) struct InternalDb {
-	pub(crate) global: Scope,
-	pub(crate) symbols: Vec<InternalSymbol>,
-	// Reserve the indices of symbols which are referenced often
-	// to avoid having to look them up.
-	pub(crate) ixs_zscript: langs::zscript::internal::Indices,
-}
-
-impl InternalDb {
-	#[must_use]
-	pub(crate) fn new(names: &NameInterner) -> Self {
-		let start_time = Instant::now();
-
-		let mut globals = Scope::default();
-		let mut symbols = vec![];
-		let ixs_zscript = langs::zscript::internal::register(names, &mut globals, &mut symbols);
-
-		debug!(
-			"Internal symbol database initialized in {}ms.",
-			start_time.elapsed().as_millis()
-		);
-
-		Self {
-			global: globals,
-			symbols,
-			ixs_zscript,
-		}
-	}
-
-	#[must_use]
-	pub(crate) fn by_index(&self, index: usize) -> &InternalSymbol {
-		&self.symbols[index]
-	}
-}
-
-#[derive(Debug)]
-pub(crate) struct InternalSymbol {
-	pub(crate) lang: LangId,
-	pub(crate) decl: &'static str,
-	pub(crate) docs: &'static [&'static str],
-	pub(crate) scope: Scope,
-	pub(crate) def: Definition,
-}
-
-#[derive(Debug)]
 pub(crate) struct ReadyWorld {
+	pub(crate) arena: Arena,
+	#[allow(unused)]
+	pub(crate) internal: Arc<InternalDb>,
 	pub(crate) projects: Vec<Project>,
-	pub(crate) decls: AppendOnlyVec<Symbol>,
 	/// Runs parallel to `projects`.
 	pub(crate) globals: Vec<Scope>,
-	/// If a scope within corresponds to a symbol (e.g. a class), the key `FileSpan`
-	/// will be equivalent to [`Symbol::id`] for that symbol. If the scope corresponds
-	/// to a block, the `FileSpan` will encompass the whole block.
-	pub(crate) scopes: FxDashView<FileSpan, Scope>,
-	pub(crate) defs: AppendOnlyVec<Definition>,
-	pub(crate) sym_graph: FxDashView<SymGraphKey, SymGraphValue>,
-	pub(crate) internal: Arc<InternalDb>,
-}
-
-impl ReadyWorld {
-	#[must_use]
-	pub(crate) fn symbol(&self, sym_ix: SymIx) -> OneOf<&Symbol, &InternalSymbol> {
-		if sym_ix.0.is_positive() {
-			OneOf::Left(&self.decls[sym_ix.0 as usize])
-		} else {
-			OneOf::Right(&self.internal.symbols[sym_ix.0.unsigned_abs() as usize])
-		}
-	}
-
-	#[must_use]
-	pub(crate) fn definition(&self, def_ix: DefIx) -> &Definition {
-		&self.defs[def_ix.0 as usize]
-	}
+	pub(crate) symbols: FxDashView<SymbolId, SymPtr>,
+	/// For scopes that aren't attached to symbols. At the moment,
+	/// this exclusively means function bodies (ZScript, DECORATE, ACS),
+	/// and ACS module scopes.
+	pub(crate) scopes: FxDashView<FileSpan, ScopePtr>,
+	pub(crate) sym_graph: FxDashView<SymGraphKey, SymGraphVal>,
 }
 
 #[derive(Debug)]
@@ -408,47 +378,43 @@ pub(crate) struct PendingWorld {
 
 #[derive(Debug)]
 pub(crate) struct WorkingWorld {
+	pub(crate) arena: Arena,
 	// Context /////////////////////////////////////////////////////////////////
 	pub(crate) paths: Arc<PathInterner>,
-	pub(crate) names: NameInterner,
+	pub(crate) names: Arc<NameInterner>,
 	pub(crate) internal: Arc<InternalDb>,
 	pub(crate) projects: Vec<Project>,
-	// Intermediate state //////////////////////////////////////////////////////
-	pub(crate) scope_work: FxDashMap<FileSpan, Receiver<Scope>>,
-	pub(crate) extensions: AppendOnlyVec<FileSpan>,
 	// Artefacts ///////////////////////////////////////////////////////////////
-	pub(crate) decls: AppendOnlyVec<Symbol>,
-	pub(crate) defs: AppendOnlyVec<Definition>,
 	pub(crate) globals: Vec<RwLock<Scope>>,
-	/// See [`ReadyWorld::scopes`] for details.
-	pub(crate) scopes: FxDashMap<FileSpan, Scope>,
-	pub(crate) sym_graph: FxDashMap<SymGraphKey, SymGraphValue>,
 	pub(crate) diags: FxDashMap<PathIx, Vec<Diagnostic>>,
+	/// The source of truth for user symbol data.
+	/// Arena pointers should only be freed through here.
+	pub(crate) symbols: FxDashMap<SymbolId, SymPtr>,
+	/// See [`ReadyWorld::scopes`] for details.
+	pub(crate) scopes: FxDashMap<FileSpan, ScopePtr>,
+	pub(crate) sym_graph: FxDashMap<SymGraphKey, SymGraphVal>,
 }
 
 impl WorkingWorld {
-	#[must_use]
-	pub(crate) fn symbol(&self, sym_ix: SymIx) -> OneOf<&Symbol, &InternalSymbol> {
-		if sym_ix.0.is_positive() || sym_ix.0 == 0 {
-			OneOf::Left(&self.decls[sym_ix.0 as usize])
-		} else {
-			OneOf::Right(&self.internal.symbols[sym_ix.0.unsigned_abs() as usize])
-		}
-	}
-
 	pub(crate) fn refresh(&mut self, ctx: WorkContext) {
-		self.projects = ctx.projects;
-
-		self.extensions = AppendOnlyVec::new();
-		// TODO: Would it be faster to clear these maps over separate threads?
-		self.scopes.clear();
-		self.sym_graph.clear();
-		self.scope_work.clear();
-
-		debug_assert_eq!(self.decls.len(), 0);
-		debug_assert_eq!(self.defs.len(), 0);
 		debug_assert!(self.diags.is_empty());
 		debug_assert!(self.globals.is_empty());
+
+		self.projects = ctx.projects;
+
+		// TODO:
+		// - at what scale does parallel iteration become faster than serial`?
+		// - would clearing these structures over multiple threads be faster?
+		self.symbols.iter().for_each(|kvp| unsafe {
+			if let Some(sym_ptr) = kvp.value().as_ptr() {
+				std::ptr::drop_in_place(sym_ptr.as_ptr());
+			}
+		});
+
+		self.symbols.clear();
+		self.scopes.clear();
+		self.sym_graph.clear();
+		self.arena.reset();
 
 		self.globals.push(RwLock::new(self.internal.global.clone()));
 
@@ -461,28 +427,16 @@ impl WorkingWorld {
 			}
 
 			#[cfg(debug_assertions)]
-			debug!("Finished phase 1 for project: {}", project.root.display());
-
-			// Fill out scopes of global symbols (e.g. class fields, enum variants).
-			// Resolve ZScript and DECORATE inheritance; expand ZScript mixins.
-			ctx.tracker.phase.store(WorkPhase::PostDeclaration);
-
-			if project.zscript.root.is_some() {
-				langs::zscript::front2(self, i, project);
-				langs::zscript::extend_classes_and_structs(self, i);
-			}
-
-			#[cfg(debug_assertions)]
-			debug!("Finished phase 2 for project: {}", project.root.display());
+			debug!(
+				"Finished declaring symbols for project: {}",
+				project.root.display()
+			);
 
 			// Defining and checking types.
 			ctx.tracker.phase.store(WorkPhase::Definition);
 
-			// Verify nothing unexpected happened during previous two phases.
-			debug_assert_eq!(self.defs.len(), 0);
-
 			if project.zscript.root.is_some() {
-				langs::zscript::front3(self, i, project);
+				langs::zscript::front2(self, i, project);
 			}
 
 			#[cfg(debug_assertions)]
@@ -505,13 +459,14 @@ impl WorkingWorld {
 		self.globals[project_ix].write()
 	}
 
+	#[allow(unused)]
 	#[must_use]
 	pub(crate) fn get_file(&self, project_ix: usize, fspan: FileSpan) -> &Source {
 		self.projects[project_ix].files.get(&fspan.file_id).unwrap()
 	}
 
 	#[must_use]
-	pub(crate) fn file_with(&self, sym: &Symbol) -> &Source {
+	pub(crate) fn file_with(&self, sym: &UserSymbol) -> &Source {
 		self.projects[sym.project as usize]
 			.files
 			.get(&sym.id.file_id)
@@ -608,155 +563,13 @@ pub(crate) struct WorkTracker {
 pub(crate) enum WorkPhase {
 	#[default]
 	Declaration,
-	PostDeclaration,
 	Definition,
+	// TODO: this will be used to signal to the main thread whether it should wait
+	// for a refresh to complete or service user requests from the existing ready world.
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct FileSpan {
-	pub(crate) file_id: PathIx,
-	pub(crate) span: TextRange,
-}
-
-impl PartialOrd for FileSpan {
-	fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-		match self.file_id.partial_cmp(&other.file_id) {
-			Some(core::cmp::Ordering::Equal) => {}
-			ord => return ord,
-		}
-
-		PartialOrd::partial_cmp(
-			&(u32::from(self.span.start()), u32::from(self.span.end())),
-			&(u32::from(other.span.start()), u32::from(other.span.end())),
-		)
-	}
-}
-
-impl Ord for FileSpan {
-	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-		match self.file_id.cmp(&other.file_id) {
-			core::cmp::Ordering::Equal => {}
-			ord => return ord,
-		}
-
-		Ord::cmp(
-			&(u32::from(self.span.start()), u32::from(self.span.end())),
-			&(u32::from(other.span.start()), u32::from(other.span.end())),
-		)
-	}
-}
-
-/// To mitigate chances of misusing [`FileSpan`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub(crate) struct SymbolId(pub(crate) FileSpan);
-
-impl std::ops::Deref for SymbolId {
-	type Target = FileSpan;
-
-	fn deref(&self) -> &Self::Target {
-		&self.0
-	}
-}
-
-/// A strongly-typed index into:
-/// - [`ReadyWorld::decls`]/[`WorkingWorld::decls`], if positive.
-/// - [`InternalDb::symbols`] if negative (via `abs`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct SymIx(pub(crate) i32);
-
-impl SymIx {
-	#[must_use]
-	pub(crate) fn internal(index: usize) -> Self {
-		Self(-(index as i32))
-	}
-}
-
-/// A strongly-typed index into [`ReadyWorld::defs`]/[`WorkingWorld::defs`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct DefIx(pub(crate) u32);
-
-impl DefIx {
-	pub(crate) const PLACEHOLDER: Self = Self(u32::MAX);
-	pub(crate) const PENDING: Self = Self(u32::MAX - 1);
-}
-
-#[derive(Debug)]
-pub(crate) struct Symbol {
-	pub(crate) id: SymbolId,
-	pub(crate) lang: LangId,
-	pub(crate) syn: SyntaxKind,
-	/// An index into [`WorkingWorld::projects`].
-	pub(crate) project: u8,
-	/// The part of this symbol that's important to serving diagnostics.
-	///
-	/// For example, a ZScript function definition's "critical span" starts at its
-	/// first qualifier keyword or return type token and ends at the closing
-	/// parenthesis of its parameter list or `const` keyword.
-	pub(crate) crit_span: TextRange,
-	pub(crate) def: AtomicCell<DefIx>,
-}
-
-impl Symbol {
-	#[must_use]
-	pub(crate) fn definition(&self) -> Option<DefIx> {
-		let ret = self.def.load();
-		(ret != DefIx::PLACEHOLDER).then_some(ret)
-	}
-}
-
-#[derive(Debug)]
-pub(crate) enum Definition {
-	_CVarInfo(langs::cvarinfo::sema::Datum),
-	ZScript(langs::zscript::sema::Datum),
-}
-
-#[derive(Debug)]
-pub(crate) enum SymGraphValue {
-	Symbol(SymIx),
-	Symbols(Vec<SymIx>),
-	References(Vec<FileSpan>),
-}
-
-/// A key into [`ReadyWorld::sym_graph`]/[`WorkingWorld::sym_graph`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum SymGraphKey {
-	/// The value is the direct ancestor of a ZScript or DECORATE class.
-	ParentOf(SymIx),
-	/// The value is the set of all ancestors of a ZScript or DECORATE class.
-	ChildrenOf(SymIx),
-
-	/// The value is the set of all mixin classes applied to a ZScript class.
-	Mixins(SymIx),
-	/// The value is the set of all ZScript classes which apply a mixin.
-	MixinRefs(SymIx),
-
-	/// The value is the set of all members of a ZScript or DECORATE aggregate.
-	Members(SymIx),
-	/// The value is the ZScript or DECORATE aggregate which has this symbol as a member.
-	Holder(SymIx),
-
-	/// The value is the ZScript abstract or virtual function.
-	PrototypeFor(SymIx),
-	/// The value is the set of all overrides of this ZScript abstract or virtual function.
-	OverrideOf(SymIx),
-
-	/// The value is the symbol referred to by the token at this file-span.
-	/// This span does not necessarily have to map to a token; for example,
-	/// a ZScript string literal may have multiple LANGUAGE ID references in it.
-	Reference(FileSpan),
-	/// The value is a [`SymGraphValue::References`]; all spans referring to this symbol.
-	/// These spans do not necessarily have to each map to a token; for example,
-	/// a ZScript string literal may have multiple LANGUAGE ID references in it.
-	Referred(SymIx),
-}
-
-pub(crate) type Scope = im::HashMap<NsName, SymIx, BuildHasherDefault<FxHasher>>;
+pub(crate) type Scope = im::HashMap<NsName, SymPtr, BuildHasherDefault<FxHasher>>;
 
 const _STATIC_ASSERT_WORKPHASE_LOCKFREE: () = {
 	assert!(AtomicCell::<WorkPhase>::is_lock_free());
-};
-
-const _STATIC_ASSERT_DEFIX_LOCKFREE: () = {
-	assert!(AtomicCell::<DefIx>::is_lock_free());
 };

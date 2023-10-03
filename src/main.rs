@@ -1,8 +1,14 @@
 //! # DoomLS
 //!
 //! A language server covering domain-specific languages written for Doom's source ports.
+//!
+//! Its architecture is based on the proposal for the Zig Language Server laid
+//! out by Alexey Kladov here:
+//! <https://matklad.github.io/2023/05/06/zig-language-server-and-cancellation.html>
 
+pub(crate) mod arena;
 pub(crate) mod core;
+pub(crate) mod data;
 pub(crate) mod error;
 pub(crate) mod frontend;
 pub(crate) mod intern;

@@ -76,7 +76,7 @@ impl NameInterner {
 	}
 
 	#[must_use]
-	pub(crate) fn _resolve(&self, ns_name: NsName) -> &str {
+	pub(crate) fn resolve(&self, ns_name: NsName) -> &str {
 		self.array[ns_name.index().0 as usize].0.text()
 	}
 

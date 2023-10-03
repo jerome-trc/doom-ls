@@ -7,7 +7,9 @@
 use doomfront::zdoom;
 
 use crate::{
-	core::{Definition, InternalSymbol, Scope, SymIx},
+	arena::Arena,
+	core::Scope,
+	data::{Definition, InternalSymbol, SymPtr, Symbol},
 	intern::{NameInterner, NsName},
 	langs::LangId,
 };
@@ -15,19 +17,19 @@ use crate::{
 use super::sema::{self, FunctionFlags};
 
 #[derive(Debug)]
-pub(crate) struct Indices {
-	pub(crate) class_object: usize,
+pub(crate) struct Cache {
+	pub(crate) class_object: SymPtr,
 }
 
 #[must_use]
 pub(crate) fn register(
 	names: &NameInterner,
 	globals: &mut Scope,
-	symbols: &mut Vec<InternalSymbol>,
-) -> Indices {
-	let ix_class_object = register_with_members(
+	bump: &mut bumpalo::Bump,
+) -> Cache {
+	let ptr_class_object = register_with_members(
 		globals,
-		symbols,
+		bump,
 		[
 			(
 				NsName::Value(names.intern_str("TICRATE")),
@@ -70,7 +72,7 @@ pub(crate) fn register(
 
 	register_with_members(
 		globals,
-		symbols,
+		bump,
 		[],
 		NsName::Type(names.intern_str("Thinker")),
 		InternalSymbol {
@@ -88,7 +90,7 @@ pub(crate) fn register(
 
 	register_with_members(
 		globals,
-		symbols,
+		bump,
 		[],
 		NsName::Type(names.intern_str("Actor")),
 		InternalSymbol {
@@ -100,30 +102,28 @@ pub(crate) fn register(
 		},
 	);
 
-	Indices {
-		class_object: ix_class_object,
+	Cache {
+		class_object: ptr_class_object,
 	}
 }
 
 fn register_with_members(
 	globals: &mut Scope,
-	symbols: &mut Vec<InternalSymbol>,
+	bump: &mut bumpalo::Bump,
 	members: impl IntoIterator<Item = (NsName, InternalSymbol)>,
 	ns_name: NsName,
 	mut symbol: InternalSymbol,
-) -> usize {
+) -> SymPtr {
 	let mut scope = Scope::default();
 
 	for (m_ns_name, member) in members.into_iter() {
-		let l = symbols.len();
-		symbols.push(member);
-		scope.insert(m_ns_name, SymIx(-(l as i32)));
+		let ptr = Arena::alloc(bump, Symbol::Internal(member));
+		scope.insert(m_ns_name, ptr);
 	}
 
 	symbol.scope = scope;
-	let ix = symbols.len();
-	symbols.push(symbol);
-	globals.insert(ns_name, SymIx(-(ix as i32)));
+	let ptr = Arena::alloc(bump, Symbol::Internal(symbol));
+	globals.insert(ns_name, ptr.clone());
 
-	ix
+	ptr
 }

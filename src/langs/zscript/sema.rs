@@ -6,8 +6,12 @@ use doomfront::zdoom;
 pub(crate) enum Datum {
 	Class,
 	Constant,
+	_Enum,
 	_Field(Field),
 	Function(Function),
+	_MixinClass,
+	_Primitive,
+	_Struct,
 }
 
 #[derive(Debug)]

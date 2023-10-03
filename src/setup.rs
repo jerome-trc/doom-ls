@@ -75,6 +75,7 @@ pub(crate) fn capabilities() -> ServerCapabilities {
 				full: Some(SemanticTokensFullOptions::Bool(true)),
 			},
 		)),
+		workspace_symbol_provider: Some(OneOf::Left(true)),
 		/*
 
 		TODO

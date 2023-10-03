@@ -13,7 +13,7 @@ use regex::Regex;
 use zscript::sema;
 
 use crate::{
-	core::{Definition, FileSpan, SymGraphKey, SymGraphValue},
+	data::{Definition, FileSpan, SymGraphKey, SymGraphVal, Symbol},
 	error::Error,
 	langs::zscript,
 	lines::LineCol,
@@ -128,25 +128,22 @@ fn highlight_ident(ctx: &request::Context, hl: &mut Highlighter, token: SyntaxTo
 		span: token.text_range(),
 	};
 
-	let Some(SymGraphValue::Symbol(sym_ix)) =
+	let Some(SymGraphVal::Symbol(sym_ptr)) =
 		ctx.core.ready.sym_graph.get(&SymGraphKey::Reference(fspan))
 	else {
 		return;
 	};
 
-	let sym = match ctx.core.ready.symbol(*sym_ix) {
-		lsp_types::OneOf::Left(u) => u,
-		lsp_types::OneOf::Right(internal) => {
-			highlight_by_definition(hl, token, &internal.def);
-			return;
+	match sym_ptr.as_ref().unwrap() {
+		Symbol::User(u_sym) => {
+			if let Some(def) = u_sym.definition() {
+				highlight_by_definition(hl, token, def);
+			}
 		}
-	};
-
-	let Some(def_ix) = sym.definition() else {
-		return;
-	};
-
-	highlight_by_definition(hl, token, ctx.core.ready.definition(def_ix));
+		Symbol::Internal(in_sym) => {
+			highlight_by_definition(hl, token, &in_sym.def);
+		}
+	}
 }
 
 fn highlight_by_definition(hl: &mut Highlighter, token: SyntaxToken, def: &Definition) {
@@ -156,6 +153,9 @@ fn highlight_by_definition(hl: &mut Highlighter, token: SyntaxToken, def: &Defin
 		}
 		Definition::ZScript(sema::Datum::Constant) => {
 			hl.advance(SemToken::Constant, token.text_range());
+		}
+		Definition::ZScript(sema::Datum::_Enum) => {
+			hl.advance(SemToken::Enum, token.text_range());
 		}
 		Definition::ZScript(sema::Datum::_Field(sema::Field { flags, deprecated })) => {
 			hl.advance_mod(SemToken::Property, token.text_range(), {
@@ -196,6 +196,15 @@ fn highlight_by_definition(hl: &mut Highlighter, token: SyntaxToken, def: &Defin
 					stf
 				},
 			);
+		}
+		Definition::ZScript(sema::Datum::_MixinClass) => {
+			hl.advance(SemToken::Macro, token.text_range());
+		}
+		Definition::ZScript(sema::Datum::_Primitive) => {
+			hl.advance(SemToken::Keyword, token.text_range());
+		}
+		Definition::ZScript(sema::Datum::_Struct) => {
+			hl.advance(SemToken::Struct, token.text_range());
 		}
 		Definition::_CVarInfo(_) => {} // TODO
 	}

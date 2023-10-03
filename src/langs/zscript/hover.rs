@@ -2,13 +2,17 @@
 
 mod keyword;
 
-use doomfront::zdoom::zscript::{Syn, SyntaxToken};
+use doomfront::{
+	rowan::ast::AstNode,
+	zdoom::zscript::{ast, Syn, SyntaxToken},
+};
 use lsp_server::{Message, Response};
-use lsp_types::{Hover, HoverContents, HoverParams, LanguageString, MarkedString, OneOf};
+use lsp_types::{Hover, HoverContents, HoverParams, LanguageString, MarkedString};
 use tracing::debug;
 
 use crate::{
-	core::{FileSpan, SymGraphKey, SymGraphValue},
+	data::{FileSpan, SymGraphKey, SymGraphVal, Symbol},
+	langs::LangId,
 	request, util, UnitResult,
 };
 
@@ -66,7 +70,7 @@ fn ident(ctx: &request::Context, token: SyntaxToken) -> Option<HoverContents> {
 		span: token.text_range(),
 	};
 
-	let Some(SymGraphValue::Symbol(sym_ix)) =
+	let Some(SymGraphVal::Symbol(sym_ptr)) =
 		ctx.core.ready.sym_graph.get(&SymGraphKey::Reference(fspan))
 	else {
 		#[cfg(debug_assertions)]
@@ -75,31 +79,46 @@ fn ident(ctx: &request::Context, token: SyntaxToken) -> Option<HoverContents> {
 		return None;
 	};
 
-	let sym = match ctx.core.ready.symbol(*sym_ix) {
-		OneOf::Left(sym) => sym,
-		OneOf::Right(internal) => {
-			let mut strings = vec![];
+	let mut strings = vec![];
 
-			for &doc in internal.docs {
+	match sym_ptr.as_ref().unwrap() {
+		Symbol::User(u_sym) => {
+			let origin_src = ctx.core.file_with(u_sym);
+			let syn_node = origin_src.node_covering(u_sym.id.span);
+
+			if u_sym.lang == LangId::ZScript {
+				if let Some(documentable) = ast::Documentable::cast(syn_node) {
+					let mut doc_string = String::new();
+
+					for doc in documentable.docs() {
+						doc_string.push_str(doc.text_trimmed());
+						doc_string.push(' ');
+					}
+
+					doc_string.pop();
+
+					strings.push(MarkedString::String(doc_string));
+				}
+			}
+
+			if let Some(t) = ctx.core.decl_text(sym_ptr, u_sym) {
+				strings.push(MarkedString::LanguageString(LanguageString {
+					language: u_sym.lang.to_str().to_owned(),
+					value: t,
+				}));
+			}
+		}
+		Symbol::Internal(in_sym) => {
+			for &doc in in_sym.docs {
 				strings.push(MarkedString::String(doc.to_owned()));
 			}
 
 			strings.push(MarkedString::LanguageString(LanguageString {
-				language: internal.lang.to_str().to_owned(),
-				value: internal.decl.to_owned(),
+				language: in_sym.lang.to_str().to_owned(),
+				value: in_sym.decl.to_owned(),
 			}));
-
-			return Some(HoverContents::Array(strings));
 		}
-	};
+	}
 
-	let (_, sym_project) = ctx.core.project_with(sym.id.file_id).unwrap();
-	let origin = sym_project.files.get(&sym.id.file_id).unwrap();
-
-	Some(HoverContents::Array(vec![MarkedString::LanguageString(
-		LanguageString {
-			language: sym.lang.to_str().to_owned(),
-			value: origin.text[sym.crit_span].to_owned(),
-		},
-	)]))
+	Some(HoverContents::Array(strings))
 }

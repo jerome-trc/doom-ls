@@ -1,24 +1,13 @@
-//! The ZScript frontend's first phase: symbol expansions.
-//!
-//! Recursively fill scopes with innards (e.g. declaring methods in classes),
-//! resolving inheritance and performing mixin substitution and class/struct
-//! extensions along the way.
-//!
-//! The symbol graph is populated with:
-//! - holder-to-member relationships
-//! - mixin-to-class relationships
-//! - inheritance relationships
-//! but most name-to-symbol reference relationships are deferred until phase 3.
-//! The exception is mixin statements and extensions, which aren't revisited.
-
 use doomfront::{
-	rowan::{ast::AstNode, Language, TextRange},
+	rowan::{ast::AstNode, cursor::SyntaxToken, Language, TextRange},
 	zdoom::zscript::{ast, Syn},
 };
-use lsp_types::{DiagnosticRelatedInformation, DiagnosticSeverity, OneOf};
+use lsp_types::{DiagnosticRelatedInformation, DiagnosticSeverity};
 
 use crate::{
-	core::{Definition, Scope, SymIx, Symbol},
+	arena::Arena,
+	core::Scope,
+	data::{Definition, InternalSymbol, SymPtr, Symbol},
 	frontend::FrontendContext,
 	intern::NsName,
 	langs::LangId,
@@ -27,17 +16,37 @@ use crate::{
 use super::{decl, sema::Datum};
 
 #[must_use]
-pub(crate) fn declare_class_scope(
+pub(crate) fn class_inheritance(
 	ctx: &FrontendContext,
-	sym_ix: SymIx,
+	sym_ptr: SymPtr,
 	ast: ast::ClassDef,
-) -> Option<Scope> {
-	let mut scope = if let Some(parent_ident) = ast.parent_class() {
-		let parent_ident = parent_ident.into();
-		let parent_ns_name = NsName::Type(ctx.names.intern(&parent_ident));
+	hierarchy: Vec<SymPtr>,
+) -> Scope {
+	let mut base_scope = if let Some(parent_ident) = ast.parent_class() {
+		resolve_ancestry(ctx, &ast, parent_ident.into(), hierarchy)
+	} else {
+		let parent_ptr = ctx.internal.cache_zscript.class_object.clone();
+		ctx.make_child_of(parent_ptr.clone(), parent_ptr.clone());
+		parent_ptr.as_internal().unwrap().scope.clone()
+	};
+
+	declare_class_innards(ctx, sym_ptr, &mut base_scope, ast.innards());
+	base_scope
+}
+
+#[must_use]
+fn resolve_ancestry(
+	ctx: &FrontendContext,
+	ast: &ast::ClassDef,
+	parent_ident: SyntaxToken,
+	mut hierarchy: Vec<SymPtr>,
+) -> Scope {
+	let parent_ns_name = NsName::Type(ctx.names.intern(&parent_ident));
+
+	let parent_ptr = {
 		let globals = ctx.global_scope(ctx.project_ix);
 
-		let Some(&parent_ix) = globals.get(&parent_ns_name) else {
+		let Some(parent_ptr) = globals.get(&parent_ns_name) else {
 			ctx.raise(ctx.src.diag_builder(
 				parent_ident.text_range(),
 				DiagnosticSeverity::ERROR,
@@ -48,139 +57,189 @@ pub(crate) fn declare_class_scope(
 				),
 			));
 
-			return Some(Scope::default());
+			return Scope::default();
 		};
 
-		drop(globals);
-
-		if parent_ix == sym_ix {
-			ctx.raise(ctx.src.diag_builder(
-				parent_ident.text_range(),
-				DiagnosticSeverity::ERROR,
-				format!(
-					"class `{}` has circular inheritance",
-					ast.name().unwrap().text(),
-				),
-			));
-
-			return Some(Scope::default());
-		}
-
-		let sym = match ctx.symbol(parent_ix) {
-			OneOf::Left(u_sym) => u_sym,
-			OneOf::Right(in_sym) => {
-				if in_sym.lang != LangId::ZScript {
-					// TODO: raise an issue.
-					return Some(Scope::default());
-				}
-
-				let Definition::ZScript(zs_def) = &in_sym.def else {
-					unreachable!()
-				};
-
-				match zs_def {
-					Datum::Class => return Some(in_sym.scope.clone()),
-					// TODO: Forbid inheriting from primitives, structs, mixins, enums, etc.
-					_ => unreachable!(),
-				}
-			}
-		};
-
-		if sym.lang != LangId::ZScript {
-			// Only ZScript and DECORATE symbols can use `NsName::Type`,
-			// so this is the only kind of error that's applicable here.
-			ctx.raise(ctx.src.diag_builder(
-				parent_ident.text_range(),
-				DiagnosticSeverity::ERROR,
-				format!(
-					"ZScript class `{}` cannot inherit from DECORATE class `{}`",
-					ast.name().unwrap().text(),
-					parent_ident.text(),
-				),
-			));
-
-			return Some(Scope::default());
-		}
-
-		let syn = Syn::kind_from_raw(sym.syn);
-
-		if syn != Syn::ClassDef {
-			let message = match syn {
-				Syn::StructDef => {
-					format!(
-						"ZScript class `{}` cannot inherit from struct `{}`",
-						ast.name().unwrap().text(),
-						parent_ident.text(),
-					)
-				}
-				Syn::MixinClassDef => {
-					format!(
-						"ZScript class `{}` cannot inherit from mixin class `{}`",
-						ast.name().unwrap().text(),
-						parent_ident.text(),
-					)
-				}
-				Syn::EnumDef => {
-					format!(
-						"ZScript class `{}` cannot inherit from enum `{}`",
-						ast.name().unwrap().text(),
-						parent_ident.text(),
-					)
-				}
-				// Nothing else can use `NsName::Type`.
-				_ => unreachable!(),
-			};
-
-			let src = ctx.file_with(sym);
-
-			ctx.raise(src.diag_builder(
-				parent_ident.text_range(),
-				DiagnosticSeverity::ERROR,
-				message,
-			));
-
-			return Some(Scope::default());
-		}
-
-		let Some(parent_scope) = require_scope(ctx, parent_ix, sym) else {
-			return Some(Scope::default());
-		};
-
-		ctx.make_child_of(parent_ix, sym_ix);
-
-		parent_scope
-	} else {
-		let parent_ix = SymIx::internal(ctx.internal.ixs_zscript.class_object);
-
-		ctx.make_child_of(parent_ix, sym_ix);
-
-		ctx.internal
-			.by_index(ctx.internal.ixs_zscript.class_object)
-			.scope
-			.clone()
+		parent_ptr.clone()
 	};
 
-	declare_class_innards(ctx, sym_ix, &mut scope, ast.innards());
+	if hierarchy.contains(&parent_ptr) {
+		ctx.raise(ctx.src.diag_builder(
+			parent_ident.text_range(),
+			DiagnosticSeverity::ERROR,
+			format!(
+				"class `{}` has circular inheritance",
+				ast.name().unwrap().text(),
+			),
+		)); // TODO: how much richer can this error messaging be?
 
-	Some(scope)
+		return Scope::default();
+	}
+
+	hierarchy.push(parent_ptr.clone());
+
+	if parent_ptr.lang() != LangId::ZScript {
+		debug_assert_eq!(parent_ptr.lang(), LangId::Decorate);
+		// Only ZScript and DECORATE symbols can use `NsName::Type`,
+		// so this is the only kind of error that's applicable here.
+		ctx.raise(ctx.src.diag_builder(
+			parent_ident.text_range(),
+			DiagnosticSeverity::ERROR,
+			format!(
+				"ZScript class `{}` cannot inherit from DECORATE class `{}`",
+				ast.name().unwrap().text(),
+				parent_ident.text(),
+			),
+		));
+
+		return Scope::default();
+	}
+
+	match parent_ptr.as_ref().unwrap() {
+		Symbol::User(_) => validate_user_parent(ctx, parent_ptr, ast, parent_ident, hierarchy),
+		Symbol::Internal(in_sym) => validate_internal_parent(ctx, in_sym, ast, parent_ident),
+	}
+}
+
+fn validate_internal_parent(
+	ctx: &FrontendContext,
+	parent_sym: &InternalSymbol,
+	ast: &ast::ClassDef,
+	parent_ident: SyntaxToken,
+) -> Scope {
+	let Definition::ZScript(def) = &parent_sym.def else {
+		unreachable!()
+	};
+
+	if matches!(def, Datum::Class { .. }) {
+		return parent_sym.scope.clone();
+	}
+
+	let diag_builder = ctx.src.diag_builder(
+		parent_ident.text_range(),
+		DiagnosticSeverity::ERROR,
+		format!(
+			"class `{}` has unknown parent class `{}`",
+			ast.name().unwrap().text(),
+			parent_ident.text()
+		),
+	);
+
+	let related_loc = ctx.make_location(
+		ctx.src,
+		TextRange::new(
+			parent_ident.text_range().start(),
+			parent_ident.text_range().start(),
+		),
+	);
+
+	let message = match def {
+		Datum::_Enum => {
+			format!("`{}` is an enum", parent_ident.text())
+		}
+		Datum::_MixinClass => {
+			format!("`{}` is a mixin class", parent_ident.text())
+		}
+		Datum::_Primitive => {
+			format!("`{}` is a primitive type", parent_ident.text())
+		}
+		Datum::_Struct => {
+			format!("`{}` is a struct", parent_ident.text())
+		}
+		Datum::Class => unreachable!(), // Already handled.
+		// None of these can be retrieved using `NsName::Type`.
+		Datum::Constant | Datum::_Field(_) | Datum::Function(_) => unreachable!(),
+	};
+
+	ctx.raise(diag_builder.with_related(DiagnosticRelatedInformation {
+		location: related_loc,
+		message,
+	}));
+
+	Scope::default()
+}
+
+fn validate_user_parent(
+	ctx: &FrontendContext,
+	parent_sym: SymPtr,
+	ast: &ast::ClassDef,
+	parent_ident: SyntaxToken,
+	hierarchy: Vec<SymPtr>,
+) -> Scope {
+	let parent_u = parent_sym.as_user().unwrap();
+	let parent_syn = Syn::kind_from_raw(parent_u.syn);
+
+	if parent_syn != Syn::ClassDef {
+		let diag_builder = ctx.src.diag_builder(
+			parent_ident.text_range(),
+			DiagnosticSeverity::ERROR,
+			format!(
+				"class `{}` has unknown parent class `{}`",
+				ast.name().unwrap().text(),
+				parent_ident.text()
+			),
+		);
+
+		let related_loc = ctx.make_location(ctx.file_with(parent_u), parent_u.id.span);
+
+		let message = match parent_syn {
+			Syn::EnumDef => format!("`{}` is an enum", parent_ident.text()),
+			Syn::StructDef => format!("`{}` is a struct", parent_ident.text()),
+			Syn::MixinClassDef => format!("`{}` is a mixin class", parent_ident.text()),
+			// Nothing else can be retrieved using `NsName::Type`.
+			_ => unreachable!(),
+		};
+
+		ctx.raise(diag_builder.with_related(DiagnosticRelatedInformation {
+			location: related_loc,
+			message,
+		}));
+
+		return Scope::default();
+	}
+
+	let ret = if let Some(p) = parent_u.scope.as_ref() {
+		p.clone()
+	} else {
+		// Any class defined in a previous project should have already had its
+		// inheritance fully resolved.
+		debug_assert_eq!((parent_u.project as usize), ctx.project_ix);
+		let src = ctx.file_with(parent_u);
+		let node = src.node_covering::<Syn>(parent_u.id.span);
+		let new_ctx = FrontendContext { src, ..*ctx };
+
+		let p = class_inheritance(
+			&new_ctx,
+			parent_sym.clone(),
+			ast::ClassDef::cast(node).unwrap(),
+			hierarchy,
+		);
+
+		let mut bump = ctx.arena.borrow();
+		let scope_ptr = Arena::alloc(&mut bump, p.clone());
+		parent_u.scope.store(scope_ptr.as_ptr().unwrap());
+		p
+	};
+
+	ret
 }
 
 pub(crate) fn declare_class_innards(
 	ctx: &FrontendContext,
-	sym_ix: SymIx,
+	class_ptr: SymPtr,
 	scope: &mut Scope,
 	innards: impl Iterator<Item = ast::ClassInnard>,
 ) {
 	for innard in innards {
 		match innard {
 			ast::ClassInnard::Function(fndecl) => {
-				declare_function(ctx, sym_ix, scope, fndecl, true);
+				decl::declare_function(ctx, class_ptr.clone(), scope, fndecl, true);
 			}
 			ast::ClassInnard::Field(field) => {
-				declare_field(ctx, sym_ix, scope, field);
+				decl::declare_field(ctx, class_ptr.clone(), scope, field);
 			}
 			ast::ClassInnard::Flag(flagdef) => {
-				declare_flagdef(ctx, sym_ix, scope, flagdef);
+				decl::declare_flagdef(ctx, class_ptr.clone(), scope, flagdef);
 			}
 			ast::ClassInnard::Enum(enumdef) => {
 				decl::declare_enum(ctx, Some(scope), enumdef);
@@ -189,19 +248,19 @@ pub(crate) fn declare_class_innards(
 				decl::declare_constant(ctx, Some(scope), constdef);
 			}
 			ast::ClassInnard::States(states) => {
-				declare_state_labels(ctx, sym_ix, scope, states);
+				decl::declare_state_labels(ctx, class_ptr.clone(), scope, states);
 			}
 			ast::ClassInnard::StaticConst(sconst) => {
 				decl::declare_static_const(ctx, scope, sconst);
 			}
 			ast::ClassInnard::Property(property) => {
-				declare_property(ctx, sym_ix, scope, property);
+				decl::declare_property(ctx, class_ptr.clone(), scope, property);
 			}
 			ast::ClassInnard::Struct(structdef) => {
 				decl::declare_struct(ctx, Some(scope), structdef);
 			}
 			ast::ClassInnard::Mixin(mixin_stat) => {
-				expand_mixin(ctx, sym_ix, scope, mixin_stat);
+				expand_mixin(ctx, class_ptr.clone(), scope, mixin_stat);
 			}
 			ast::ClassInnard::Default(_) => continue,
 		}
@@ -210,7 +269,7 @@ pub(crate) fn declare_class_innards(
 
 pub(crate) fn declare_struct_innards(
 	ctx: &FrontendContext,
-	sym_ix: SymIx,
+	struct_ptr: SymPtr,
 	scope: &mut Scope,
 	innards: impl Iterator<Item = ast::StructInnard>,
 ) {
@@ -226,102 +285,49 @@ pub(crate) fn declare_struct_innards(
 				decl::declare_static_const(ctx, scope, sconst);
 			}
 			ast::StructInnard::Function(fndecl) => {
-				declare_function(ctx, sym_ix, scope, fndecl, false);
+				decl::declare_function(ctx, struct_ptr.clone(), scope, fndecl, false);
 			}
 			ast::StructInnard::Field(field) => {
-				declare_field(ctx, sym_ix, scope, field);
+				decl::declare_field(ctx, struct_ptr.clone(), scope, field);
 			}
 		}
 	}
-}
-
-#[must_use]
-pub(crate) fn declare_mixin_class_innards(
-	ctx: &FrontendContext,
-	sym_ix: SymIx,
-	ast: ast::MixinClassDef,
-) -> Option<Scope> {
-	let mut scope = Scope::default();
-
-	for innard in ast.innards() {
-		match innard {
-			ast::ClassInnard::Const(constdef) => {
-				decl::declare_constant(ctx, Some(&mut scope), constdef);
-			}
-			ast::ClassInnard::Enum(enumdef) => {
-				decl::declare_enum(ctx, Some(&mut scope), enumdef);
-			}
-			ast::ClassInnard::Struct(structdef) => {
-				decl::declare_struct(ctx, Some(&mut scope), structdef);
-			}
-			ast::ClassInnard::StaticConst(sconst) => {
-				decl::declare_static_const(ctx, &mut scope, sconst);
-			}
-			ast::ClassInnard::Function(fndecl) => {
-				declare_function(ctx, sym_ix, &mut scope, fndecl, true);
-			}
-			ast::ClassInnard::Field(field) => {
-				declare_field(ctx, sym_ix, &mut scope, field);
-			}
-			ast::ClassInnard::States(states) => {
-				declare_state_labels(ctx, sym_ix, &mut scope, states);
-			}
-			ast::ClassInnard::Property(property) => {
-				declare_property(ctx, sym_ix, &mut scope, property);
-			}
-			ast::ClassInnard::Flag(flagdef) => {
-				declare_flagdef(ctx, sym_ix, &mut scope, flagdef);
-			}
-			ast::ClassInnard::Default(_) => continue,
-			ast::ClassInnard::Mixin(_) => unreachable!(),
-		}
-	}
-
-	Some(scope)
 }
 
 pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 	let ident = ast.name().unwrap().into();
 	let ns_name = NsName::Type(ctx.names.intern(&ident));
 
-	let globals = ctx.global_scope(ctx.project_ix);
+	let extended_ptr = {
+		let globals = ctx.global_scope(ctx.project_ix);
 
-	let Some(&extended_ix) = globals.get(&ns_name) else {
+		let Some(e) = globals.get(&ns_name) else {
+			ctx.raise(ctx.src.diag_builder(
+				ident.text_range(),
+				DiagnosticSeverity::ERROR,
+				format!("class `{}` not found", ident.text()),
+			));
+
+			return;
+		};
+
+		e.clone()
+	};
+
+	let Some(u_sym) = extended_ptr.as_user() else {
 		ctx.raise(ctx.src.diag_builder(
 			ident.text_range(),
 			DiagnosticSeverity::ERROR,
-			format!("class `{}` not found", ident.text()),
+			format!(
+				"internal symbol `{}` cannot be extended by user code",
+				ident.text()
+			),
 		));
 
 		return;
 	};
 
-	drop(globals);
-
-	ctx.make_ref_to(ident.text_range(), extended_ix);
-
-	let sym = match ctx.symbol(extended_ix) {
-		OneOf::Left(u_sym) => u_sym,
-		OneOf::Right(in_sym) => {
-			if in_sym.lang != LangId::ZScript {
-				// TODO: raise an issue.
-				return;
-			}
-
-			ctx.raise(ctx.src.diag_builder(
-				ident.text_range(),
-				DiagnosticSeverity::ERROR,
-				format!(
-					"internal symbol `{}` cannot be extended by user code",
-					ident.text()
-				),
-			));
-
-			return;
-		}
-	};
-
-	if sym.lang != LangId::ZScript {
+	if u_sym.lang != LangId::ZScript {
 		// Only ZScript and DECORATE symbols can use `NsName::Type`,
 		// so this is the only kind of error that's applicable here.
 		ctx.raise(ctx.src.diag_builder(
@@ -336,7 +342,7 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 		return;
 	}
 
-	match Syn::kind_from_raw(sym.syn) {
+	match Syn::kind_from_raw(u_sym.syn) {
 		Syn::ClassDef => {}
 		Syn::EnumDef => {
 			ctx.raise(ctx.src.diag_builder(
@@ -371,56 +377,72 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 		other => unreachable!("expected a symbol in the type namespace, found: {other:#?}"),
 	}
 
-	let mut scope = ctx.scopes.get_mut(&sym.id.0).unwrap_or_else(|| {
-		let path = ctx.paths.resolve(sym.id.file_id);
+	let mut scope = Scope::default();
+	declare_class_innards(ctx, extended_ptr.clone(), &mut scope, ast.innards());
 
-		panic!(
-			"ZScript class at {}:{:?} has no scope",
-			path.display(),
-			sym.id.span
-		);
-	});
+	let mut refmut = ctx.symbols.get_mut(&u_sym.id).unwrap();
 
-	declare_class_innards(ctx, extended_ix, scope.value_mut(), ast.innards());
+	// SAFETY: the mutable DashMap reference is acting as a write lock on the `UserSymbol`.
+	unsafe {
+		let m = refmut.as_mut().unwrap();
+
+		let Symbol::User(u_mut) = m else {
+			unreachable!()
+		};
+
+		let scope_mut = u_mut.scope.as_mut().unwrap();
+
+		for (ns_name, sym_p) in scope.into_iter() {
+			let displaced = scope_mut.insert(ns_name, sym_p.clone());
+
+			if let Some(d) = displaced {
+				let node = ctx.src.node_covering(sym_p.as_user().unwrap().id.span);
+
+				decl::redeclare_error(
+					ctx,
+					d,
+					super::symbol_crit_span(&node),
+					ctx.names.resolve(ns_name),
+				);
+			}
+		}
+	}
 }
 
 pub(crate) fn extend_struct(ctx: &FrontendContext, ast: ast::StructExtend) {
 	let ident = ast.name().unwrap().into();
 	let ns_name = NsName::Type(ctx.names.intern(&ident));
 
-	let globals = ctx.global_scope(ctx.project_ix);
+	let extended_ptr = {
+		let globals = ctx.global_scope(ctx.project_ix);
 
-	let Some(&extended_ix) = globals.get(&ns_name) else {
+		let Some(e) = globals.get(&ns_name) else {
+			ctx.raise(ctx.src.diag_builder(
+				ident.text_range(),
+				DiagnosticSeverity::ERROR,
+				format!("struct `{}` not found", ident.text()),
+			));
+
+			return;
+		};
+
+		e.clone()
+	};
+
+	let Some(u_sym) = extended_ptr.as_user() else {
 		ctx.raise(ctx.src.diag_builder(
 			ident.text_range(),
 			DiagnosticSeverity::ERROR,
-			format!("struct `{}` not found", ident.text()),
+			format!(
+				"internal symbol `{}` cannot be extended by user code",
+				ident.text()
+			),
 		));
 
 		return;
 	};
 
-	drop(globals);
-
-	ctx.make_ref_to(ident.text_range(), extended_ix);
-
-	let sym = match ctx.symbol(extended_ix) {
-		OneOf::Left(u_sym) => u_sym,
-		OneOf::Right(_in_sym) => {
-			ctx.raise(ctx.src.diag_builder(
-				ident.text_range(),
-				DiagnosticSeverity::ERROR,
-				format!(
-					"internal symbol `{}` cannot be extended by user code",
-					ident.text()
-				),
-			));
-
-			return;
-		}
-	};
-
-	if sym.lang != LangId::ZScript {
+	if u_sym.lang != LangId::ZScript {
 		// Only ZScript and DECORATE symbols can use `NsName::Type`,
 		// so this is the only kind of error that's applicable here.
 		ctx.raise(ctx.src.diag_builder(
@@ -435,7 +457,7 @@ pub(crate) fn extend_struct(ctx: &FrontendContext, ast: ast::StructExtend) {
 		return;
 	}
 
-	match Syn::kind_from_raw(sym.syn) {
+	match Syn::kind_from_raw(u_sym.syn) {
 		Syn::StructDef => {}
 		Syn::ClassDef => {
 			ctx.raise(ctx.src.diag_builder(
@@ -470,339 +492,87 @@ pub(crate) fn extend_struct(ctx: &FrontendContext, ast: ast::StructExtend) {
 		other => unreachable!("expected a symbol in the type namespace, found: {other:#?}"),
 	}
 
-	let mut scope = ctx.scopes.get_mut(&sym.id.0).unwrap();
+	let mut scope = Scope::default();
+	declare_struct_innards(ctx, extended_ptr.clone(), &mut scope, ast.innards());
 
-	declare_struct_innards(ctx, extended_ix, scope.value_mut(), ast.innards());
-}
+	let mut refmut = ctx.symbols.get_mut(&u_sym.id).unwrap();
 
-fn expand_mixin(ctx: &FrontendContext, class_ix: SymIx, scope: &mut Scope, ast: ast::MixinStat) {
-	let mixin_ident = ast.name().unwrap().into();
-	let mixin_nsname = NsName::Type(ctx.names.intern(&mixin_ident));
+	// SAFETY: the mutable DashMap reference is acting as a write lock on the `UserSymbol`.
+	unsafe {
+		let m = refmut.as_mut().unwrap();
 
-	let globals = ctx.global_scope(ctx.project_ix);
-
-	let Some(&mixin_ix) = globals.get(&mixin_nsname) else {
-		ctx.raise(ctx.src.diag_builder(
-			mixin_ident.text_range(),
-			DiagnosticSeverity::ERROR,
-			format!("mixin class `{}` not found", mixin_ident.text()),
-		));
-
-		return;
-	};
-
-	drop(globals);
-
-	ctx.make_ref_to(mixin_ident.text_range(), mixin_ix);
-
-	if let Err(()) = ctx.make_mixin(class_ix, mixin_ix) {
-		let OneOf::Left(cls_sym) = ctx.symbol(class_ix) else {
+		let Symbol::User(u_mut) = m else {
 			unreachable!()
 		};
 
-		// TODO: should probably give symbols an `NsName` field...
-		let cls_src = ctx.file_with(cls_sym);
-		let cls_node = cls_src.node_covering::<Syn>(cls_sym.id.span);
-		let class_def = ast::ClassDef::cast(cls_node).unwrap();
+		let scope_mut = u_mut.scope.as_mut().unwrap();
 
+		for (ns_name, sym_p) in scope.into_iter() {
+			let displaced = scope_mut.insert(ns_name, sym_p.clone());
+
+			if let Some(d) = displaced {
+				let node = ctx.src.node_covering(sym_p.as_user().unwrap().id.span);
+
+				decl::redeclare_error(
+					ctx,
+					d,
+					super::symbol_crit_span(&node),
+					ctx.names.resolve(ns_name),
+				);
+			}
+		}
+	}
+}
+
+fn expand_mixin(ctx: &FrontendContext, class_ptr: SymPtr, scope: &mut Scope, ast: ast::MixinStat) {
+	let class_u = class_ptr.as_user().unwrap();
+	let mixin_ident = ast.name().unwrap().into();
+	let mixin_nsname = NsName::Type(ctx.names.intern(&mixin_ident));
+
+	let mixin_ptr = {
+		let globals = ctx.global_scope(ctx.project_ix);
+
+		let Some(mixin_ptr) = globals.get(&mixin_nsname) else {
+			ctx.raise(ctx.src.diag_builder(
+				mixin_ident.text_range(),
+				DiagnosticSeverity::ERROR,
+				format!(
+					"class `{}` applies unknown mixin class `{}`",
+					ctx.names.resolve(class_u.name),
+					mixin_ident.text()
+				),
+			));
+
+			return;
+		};
+
+		mixin_ptr.clone()
+	};
+
+	let mixin_u = mixin_ptr.as_user().unwrap();
+	ctx.make_ref_to(mixin_ident.text_range(), mixin_ptr.clone());
+
+	if let Err(()) = ctx.make_mixin(class_ptr.clone(), mixin_ptr.clone()) {
 		ctx.raise(ctx.src.diag_builder(
 			mixin_ident.text_range(),
 			DiagnosticSeverity::ERROR,
 			format!(
 				"mixin class `{}` has already been applied to class `{}`",
 				mixin_ident.text(),
-				class_def.name().unwrap().text()
+				ctx.names.resolve(class_u.name)
 			),
 		));
 
 		return;
 	}
 
-	let OneOf::Left(mixin_sym) = ctx.symbol(mixin_ix) else {
-		unimplemented!()
-	};
-
 	let new_ctx = FrontendContext {
-		project_ix: mixin_sym.project as usize,
-		src: ctx.file_with(mixin_sym),
+		project_ix: mixin_u.project as usize,
+		src: ctx.file_with(mixin_u),
 		..*ctx
 	};
 
-	let node = new_ctx.src.node_covering::<Syn>(mixin_sym.id.span);
+	let node = new_ctx.src.node_covering::<Syn>(mixin_u.id.span);
 	let mixindef = ast::MixinClassDef::cast(node).unwrap();
-	declare_class_innards(&new_ctx, class_ix, scope, mixindef.innards());
-}
-
-fn declare_field(ctx: &FrontendContext, holder: SymIx, outer: &mut Scope, ast: ast::FieldDecl) {
-	for var_name in ast.names() {
-		let ident = var_name.ident().into();
-		let ns_name = NsName::Value(ctx.names.intern(&ident));
-
-		let result = ctx.declare(
-			outer,
-			ns_name,
-			LangId::ZScript,
-			var_name.syntax(),
-			var_name.syntax().text_range(),
-		);
-
-		match result {
-			Ok(ix) => {
-				ctx.make_member(ix, holder);
-			}
-			Err(prev) => {
-				decl::redeclare_error(ctx, prev, var_name.syntax().text_range(), ident.text());
-			}
-		}
-	}
-}
-
-fn declare_flagdef(ctx: &FrontendContext, holder: SymIx, outer: &mut Scope, ast: ast::FlagDef) {
-	let ident = ast.name().unwrap().into();
-	let crit_span = ast.syntax().text_range();
-
-	let result = ctx.declare(
-		outer,
-		NsName::FlagDef(ctx.names.intern(&ident)),
-		LangId::ZScript,
-		ast.syntax(),
-		crit_span,
-	);
-
-	match result {
-		Ok(ix) => {
-			ctx.make_member(ix, holder);
-		}
-		Err(prev) => {
-			decl::redeclare_error(ctx, prev, crit_span, ident.text());
-		}
-	};
-
-	let mut varname = format!("b{}", ident.text());
-
-	{
-		let second_char = &mut varname[1..2];
-		second_char.make_ascii_uppercase();
-	}
-
-	// Note that, as of GZDoom 4.10.0, shadowing is silently accepted by the compiler.
-
-	let result = ctx.declare(
-		outer,
-		NsName::Value(ctx.names.intern_str(&varname)),
-		LangId::ZScript,
-		ast.syntax(),
-		crit_span,
-	);
-
-	match result {
-		Ok(ix) => {
-			ctx.make_member(ix, holder);
-		}
-		Err(prev) => {
-			ctx.raise(
-				ctx.src
-					.diag_builder(
-						crit_span,
-						DiagnosticSeverity::ERROR,
-						format!("flagdef's fake boolean `{varname}` shadows a field"),
-					)
-					.with_related(DiagnosticRelatedInformation {
-						location: ctx.location_of(prev).unwrap(),
-						message: "field is declared here".to_string(),
-					}),
-			);
-		}
-	}
-}
-
-fn declare_function(
-	ctx: &FrontendContext,
-	holder: SymIx,
-	outer: &mut Scope,
-	ast: ast::FunctionDecl,
-	class: bool,
-) {
-	let ident = ast.name().into();
-	let ns_name = NsName::Value(ctx.names.intern(&ident));
-
-	let crit_start = if let Some(qual) = ast.qualifiers().iter().next() {
-		qual.text_range().start()
-	} else {
-		ast.return_types().syntax().text_range().start()
-	};
-
-	let crit_end = if let Some(kw) = ast.const_keyword() {
-		kw.text_range().end()
-	} else {
-		ast.param_list().unwrap().syntax().text_range().end()
-	};
-
-	if !class {
-		let result = ctx.declare(
-			outer,
-			ns_name,
-			LangId::ZScript,
-			ast.syntax(),
-			TextRange::new(crit_start, crit_end),
-		);
-
-		match result {
-			Ok(ix) => {
-				ctx.make_member(ix, holder);
-			}
-			Err(prev) => {
-				decl::redeclare_error(
-					ctx,
-					prev,
-					TextRange::new(crit_start, crit_end),
-					ident.text(),
-				);
-			}
-		}
-	} else {
-		let (ix, overriden_opt) = ctx.decl_override(
-			outer,
-			ns_name,
-			LangId::ZScript,
-			ast.syntax(),
-			TextRange::new(crit_start, crit_end),
-		);
-
-		ctx.make_member(ix, holder);
-
-		if let Some(overriden) = overriden_opt {
-			ctx.make_override_of(overriden, ix);
-		}
-	}
-}
-
-fn declare_property(
-	ctx: &FrontendContext,
-	holder: SymIx,
-	outer: &mut Scope,
-	ast: ast::PropertyDef,
-) {
-	let ident = ast.name().unwrap().into();
-	let crit_span = ast.syntax().text_range();
-
-	let result = ctx.declare(
-		outer,
-		NsName::Property(ctx.names.intern(&ident)),
-		LangId::ZScript,
-		ast.syntax(),
-		crit_span,
-	);
-
-	match result {
-		Ok(ix) => {
-			ctx.make_member(ix, holder);
-		}
-		Err(prev) => {
-			decl::redeclare_error(ctx, prev, crit_span, ident.text());
-		}
-	}
-}
-
-fn declare_state_labels(
-	ctx: &FrontendContext,
-	holder: SymIx,
-	outer: &mut Scope,
-	ast: ast::StatesBlock,
-) {
-	for innard in ast.innards() {
-		let ast::StatesInnard::Label(label) = innard else {
-			continue;
-		};
-
-		let name_tok = label.name().into();
-		let ns_name = NsName::StateLabel(ctx.names.intern(&name_tok));
-
-		let result = ctx.declare(
-			outer,
-			ns_name,
-			LangId::ZScript,
-			label.syntax(),
-			label.syntax().text_range(),
-		);
-
-		match result {
-			Ok(ix) => {
-				ctx.make_member(ix, holder);
-			}
-			Err(prev) => {
-				decl::redeclare_error(ctx, prev, label.syntax().text_range(), name_tok.text());
-			}
-		}
-	}
-}
-
-// Details /////////////////////////////////////////////////////////////////////
-
-/// If, for example, a class needs to inherit the scope of a parent, it "requires"
-/// the parent class' scope. The thread trying to fill the child scope will check
-/// if another thread has already done so, and use that scope if it exists. Otherwise,
-/// that scope will get filled so it can be inherited from.
-#[must_use]
-fn require_scope(ctx: &FrontendContext, sym_ix: SymIx, sym: &Symbol) -> Option<Scope> {
-	if sym.lang != LangId::ZScript {
-		// TODO: raise an issue.
-		return None;
-	}
-
-	let src = ctx.file_with(sym);
-
-	let new_ctx = FrontendContext {
-		src,
-		project_ix: sym.project as usize,
-		..*ctx
-	};
-
-	let (sender, scope_opt) = match Syn::kind_from_raw(sym.syn) {
-		Syn::ClassDef => {
-			let sender = match ctx.get_scope_or_sender(sym.id.0) {
-				OneOf::Left(sender) => sender,
-				OneOf::Right(scope) => return scope,
-			};
-
-			let sym_node = src.node_covering::<Syn>(sym.id.span);
-			let classdef = ast::ClassDef::cast(sym_node).unwrap();
-			let scope_opt = declare_class_scope(&new_ctx, sym_ix, classdef);
-			(sender, scope_opt)
-		}
-		Syn::StructDef => {
-			let sender = match ctx.get_scope_or_sender(sym.id.0) {
-				OneOf::Left(sender) => sender,
-				OneOf::Right(scope) => return scope,
-			};
-
-			let sym_node = src.node_covering::<Syn>(sym.id.span);
-			let structdef = ast::StructDef::cast(sym_node).unwrap();
-			let mut scope = Scope::default();
-			declare_struct_innards(&new_ctx, sym_ix, &mut scope, structdef.innards());
-			(sender, Some(scope))
-		}
-		Syn::MixinClassDef => {
-			let sender = match ctx.get_scope_or_sender(sym.id.0) {
-				OneOf::Left(sender) => sender,
-				OneOf::Right(scope) => return scope,
-			};
-
-			let sym_node = src.node_covering::<Syn>(sym.id.span);
-			let mixindef = ast::MixinClassDef::cast(sym_node).unwrap();
-			let scope_opt = declare_mixin_class_innards(&new_ctx, sym_ix, mixindef);
-			(sender, scope_opt)
-		}
-		_ => return None,
-	};
-
-	let Some(scope) = scope_opt else {
-		return None;
-	};
-
-	ctx.scopes.insert(sym.id.0, scope.clone());
-	// If any other threads are waiting for this scope to be filled, service them.
-	while let Ok(()) = sender.try_send(scope.clone()) {}
-
-	Some(scope)
+	declare_class_innards(&new_ctx, class_ptr, scope, mixindef.innards());
 }
