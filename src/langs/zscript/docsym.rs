@@ -296,7 +296,7 @@ fn doc_symbol_enum(src: &Source, enumdef: ast::EnumDef) -> Option<DocumentSymbol
 
 			format!(": {u_t}")
 		}),
-		kind: SymbolKind::CONSTANT,
+		kind: SymbolKind::ENUM,
 		tags: None,
 		deprecated: None,
 		range: src.make_range(enumdef.syntax().text_range()),
