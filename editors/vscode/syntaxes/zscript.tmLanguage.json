@@ -54,7 +54,7 @@
             "patterns": [
                 {
                     "name": "keyword.control.zscript",
-                    "match": "\\b(?i:if|else|for|return|do|while|switch|continue|break|case)\\b"
+                    "match": "\\b(?i:if|else|for|foreach|return|do|until|while|switch|continue|break|case)\\b"
                 },
                 {
                     "name": "keyword.operator.zscript",
@@ -62,7 +62,7 @@
                 },
                 {
                     "name": "keyword.other.zscript",
-                    "match": "\\b(?i:abstract|action|clearscope|deprecated|final|native|override|play|private|protected|static|ui|vararg|virtual|virtualscope|abstract|replaces|readonly|extend|in|out|self)\\b"
+                    "match": "\\b(?i:abstract|action|clearscope|deprecated|final|internal|meta|native|override|play|private|protected|static|transient|ui|var|vararg|virtual|virtualscope|abstract|replaces|readonly|extend|in|out|self|volatile)\\b"
                 }
             ]
         },
@@ -126,7 +126,7 @@
                 },
                 {
                     "name": "storage.type.zscript",
-                    "match": "\\b(?i:null|void|class|array|bool|const|enum|struct|mixin)\\b|\\b(?<!\\.)[a-z0-9]+?(?=\\s(?!(?:alignof|sizeof|cross|dot|is|true|false))(?:\\w+?))|\\b[a-z0-9]\\w*?(?=\\s+?\\w+?\\()\\b"
+                    "match": "\\b(?i:auto|null|nullptr|void|bool|float|double|char|byte|sbyte|short|ushort|int8|uint8|int16|uint16|int|uint|long|ulong|string|sound|state|color|vector2|vector3|map|mapiterator|array|class|const|enum|struct|mixin)\\b|\\b(?<!\\.)[a-z0-9]+?(?=\\s(?!(?:alignof|sizeof|cross|dot|is|true|false))(?:\\w+?))|\\b[a-z0-9]\\w*?(?=\\s+?\\w+?\\()\\b"
                 },
                 {
                     "name": "constant.zscript",
@@ -163,6 +163,10 @@
                 {
                     "name": "entity.name.class.property.zscript",
                     "match": "(?i)(?<=property\\s+?)\\w+?\\b"
+                },
+				{
+                    "name": "entity.name.class.flagdef.zscript",
+                    "match": "(?i)(?<=flagdef\\s+?)\\w+?\\b"
                 },
                 {
                     "name": "entity.name.class.enum.zscript",
