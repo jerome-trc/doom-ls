@@ -983,6 +983,9 @@
 				"*.member": [
 					"markup.underline"
 				],
+				"*.link": [
+					"markup.underline"
+				],
 				"escapeSequence": [
 					"constant.character.escape.rust"
 				],

@@ -33,6 +33,9 @@ lsp-server = "0.7.4"
 lsp-types = "0.94.1"
 nohash-hasher = "0.2.0"
 parking_lot = { version = "0.12.1", features = ["arc_lock"] }
+petgraph = { version = "0.6.4", default-features = false, features = [
+	"graphmap",
+] }
 rayon = "1.7.0"
 regex = "1.9.5"
 rustc-hash = "1.0.1"

@@ -1,25 +1,26 @@
-//! An include tree walking routine.
+//! Functions related to manipulating include trees.
 
-use std::{path::Path, str::FromStr, sync::OnceLock};
+use std::path::{Path, PathBuf};
 
 use doomfront::{
-	rowan::{ast::AstNode, GreenNode, TextRange},
+	rowan::{ast::AstNode, GreenNode},
 	zdoom::{
-		self,
+		ast::LitToken,
 		zscript::{ast, Syn, SyntaxNode},
 	},
 };
-use lsp_types::{Diagnostic, DiagnosticSeverity, Position};
+use lsp_types::{Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, Url};
+use petgraph::prelude::DiGraphMap;
 use rayon::prelude::*;
-use regex::Regex;
 
 use crate::{
 	core::{Core, Project, Source},
 	intern::{PathInterner, PathIx},
 	langs::LangId,
-	FxDashMap,
+	FxDashMap, FxHamt,
 };
 
+/// For building an include tree from nothing during initial startup.
 pub(crate) fn walk(core: &mut Core) {
 	#[derive(Debug, Clone, Copy)]
 	struct Walker<'a> {
@@ -34,35 +35,13 @@ pub(crate) fn walk(core: &mut Core) {
 	struct Output {
 		green: Option<GreenNode>,
 		includer: PathIx,
+		directive_span: lsp_types::Range,
 	}
 
 	impl Walker<'_> {
-		fn raise(&self, message: String, span: TextRange) {
+		fn raise(&self, diag: Diagnostic) {
 			let mut diags = self.diags.entry(self.src.id).or_insert(vec![]);
-
-			let start_lc = self.src.lines.line_col(span.start());
-			let end_lc = self.src.lines.line_col(span.end());
-
-			diags.push(Diagnostic {
-				range: lsp_types::Range {
-					start: Position {
-						line: start_lc.line,
-						character: start_lc.col,
-					},
-					end: Position {
-						line: end_lc.line,
-						character: end_lc.col,
-					},
-				},
-				severity: Some(DiagnosticSeverity::ERROR),
-				code: None,
-				code_description: None,
-				source: Some("doomls".to_string()),
-				message,
-				related_information: None,
-				tags: None,
-				data: None,
-			});
+			diags.push(diag);
 		}
 	}
 
@@ -79,40 +58,55 @@ pub(crate) fn walk(core: &mut Core) {
 			.for_each(|green| {
 				let cursor = SyntaxNode::new_root(green);
 				let directive = ast::IncludeDirective::cast(cursor).unwrap();
-				let lit_tok = directive.argument().unwrap();
+				let lit = directive.argument().unwrap();
 
-				let Some(string) = lit_tok.string() else {
+				let Some(string) = lit.string() else {
 					walker.raise(
-						"expected a string".to_string(),
-						lit_tok.syntax().text_range(),
+						walker
+							.src
+							.diag_builder(
+								lit.syntax().text_range(),
+								DiagnosticSeverity::ERROR,
+								"expected a string argument".to_string(),
+							)
+							.0,
 					);
 
 					return;
 				};
 
-				let inc_path = Path::new(string);
-
-				let full_path = if inc_path.is_relative() {
-					walker
-						.paths
-						.resolve(walker.src.id)
-						.parent()
-						.unwrap()
-						.join(inc_path)
-				} else {
-					walker.project.root.join(inc_path)
+				let full_path = match compose_include_path(
+					walker.paths,
+					&walker.project.root,
+					walker.src,
+					&lit,
+					string,
+				) {
+					Ok(p) => p,
+					Err(diag) => {
+						walker.raise(diag);
+						return;
+					}
 				};
 
 				let included_id = walker.paths.intern(&full_path);
 
 				let Some(src) = walker.project.files.get(&included_id) else {
 					walker.raise(
-						format!("file does not exist: {}", full_path.display()),
-						lit_tok.syntax().text_range(),
+						walker
+							.src
+							.diag_builder(
+								lit.syntax().text_range(),
+								DiagnosticSeverity::ERROR,
+								format!("included file does not exist: {}", full_path.display()),
+							)
+							.0,
 					);
 
 					return;
 				};
+
+				let directive_span = walker.src.make_range(directive.syntax().text_range());
 
 				let green = if let Some(g) = src.green.as_ref() {
 					walker.output.insert(
@@ -120,6 +114,7 @@ pub(crate) fn walk(core: &mut Core) {
 						Output {
 							green: None,
 							includer: walker.src.id,
+							directive_span,
 						},
 					);
 
@@ -133,6 +128,7 @@ pub(crate) fn walk(core: &mut Core) {
 						Output {
 							green: Some(green.clone()),
 							includer: walker.src.id,
+							directive_span,
 						},
 					);
 
@@ -151,13 +147,6 @@ pub(crate) fn walk(core: &mut Core) {
 			});
 	}
 
-	static VERSION_RGX: OnceLock<Regex> = OnceLock::new();
-
-	#[must_use]
-	fn version_regex_init() -> Regex {
-		Regex::new("(?i)version[\0- ]*\"([0-9]+\\.[0-9]+(\\.[0-9]+)?)\"").unwrap()
-	}
-
 	for project in &mut core.pending.projects {
 		let Some(root_id) = project.zscript.root else {
 			continue;
@@ -166,65 +155,18 @@ pub(crate) fn walk(core: &mut Core) {
 		let src = project.files.get_mut(&root_id).unwrap();
 		src.lang = LangId::ZScript;
 
-		let rgx = VERSION_RGX.get_or_init(version_regex_init);
-
-		if let Some(caps) = rgx.captures(&src.text) {
-			let Some(cap0) = caps.get(1) else {
-				let diags = core.pending.malformed.entry(root_id).or_insert(vec![]);
-
-				diags.push(Diagnostic {
-					range: lsp_types::Range {
-						start: Position {
-							line: 0,
-							character: 0,
-						},
-						end: Position {
-							line: 0,
-							character: 0,
-						},
-					},
-					severity: Some(DiagnosticSeverity::ERROR),
-					code: None,
-					code_description: None,
-					source: Some("doomls".to_string()),
-					message: "bad version directive".to_string(),
-					related_information: None,
-					tags: None,
-					data: None,
-				});
-
-				continue;
-			};
-
-			let Ok(vers) = zdoom::Version::from_str(cap0.as_str()) else {
-				let diags = core.pending.malformed.entry(root_id).or_insert(vec![]);
-
-				diags.push(Diagnostic {
-					range: lsp_types::Range {
-						start: Position {
-							line: 0,
-							character: 0,
-						},
-						end: Position {
-							line: 0,
-							character: 0,
-						},
-					},
-					severity: Some(DiagnosticSeverity::ERROR),
-					code: None,
-					code_description: None,
-					source: Some("doomls".to_string()),
-					message: "bad version directive".to_string(),
-					related_information: None,
-					tags: None,
-					data: None,
-				});
-
-				continue;
-			};
-
-			project.zscript.version = vers;
-		};
+		match super::parse::resolve_version(src) {
+			Ok(vers) => {
+				project.zscript.version = vers;
+			}
+			Err(diag) => {
+				core.pending
+					.malformed
+					.entry(root_id)
+					.or_insert(vec![])
+					.push(diag);
+			}
+		}
 
 		if src.green.is_none() {
 			let (green, mut diags) = super::parse::full(src, project.zscript.version);
@@ -255,7 +197,10 @@ pub(crate) fn walk(core: &mut Core) {
 		project.zscript.includes.clear();
 
 		for (included, op) in output {
-			project.zscript.includes.insert(included, op.includer);
+			project
+				.zscript
+				.includes
+				.add_edge(op.includer, included, op.directive_span);
 
 			if let Some(green) = op.green {
 				let src = project.files.get_mut(&included).unwrap();
@@ -271,4 +216,141 @@ pub(crate) fn walk(core: &mut Core) {
 			diags_entry.append(&mut d);
 		}
 	}
+}
+
+pub(crate) fn get_includes(
+	paths: &PathInterner,
+	project_root: &Path,
+	files: FxHamt<PathIx, Source>,
+	graph: &mut DiGraphMap<PathIx, lsp_types::Range>,
+	src: &Source,
+	diags: &mut Vec<Diagnostic>,
+) {
+	let cursor = SyntaxNode::new_root(src.green.as_ref().unwrap().clone());
+
+	for top in cursor.children().filter_map(ast::TopLevel::cast) {
+		let ast::TopLevel::Include(directive) = top else {
+			continue;
+		};
+
+		let Ok(lit) = directive.argument() else {
+			diags.push(
+				src.diag_builder(
+					directive.syntax().text_range(),
+					DiagnosticSeverity::ERROR,
+					"expected a string argument".to_string(),
+				)
+				.0,
+			);
+
+			continue;
+		};
+
+		let Some(string) = lit.string() else {
+			diags.push(
+				src.diag_builder(
+					lit.syntax().text_range(),
+					DiagnosticSeverity::ERROR,
+					"expected a string argument".to_string(),
+				)
+				.0,
+			);
+
+			return;
+		};
+
+		let full_path = match compose_include_path(paths, project_root, src, &lit, string) {
+			Ok(p) => p,
+			Err(diag) => {
+				diags.push(diag);
+				return;
+			}
+		};
+
+		let included_id = paths.intern(&full_path);
+
+		if !files.contains_key(&included_id) {
+			diags.push(
+				src.diag_builder(
+					lit.syntax().text_range(),
+					DiagnosticSeverity::ERROR,
+					format!("included file does not exist: {}", full_path.display()),
+				)
+				.0,
+			);
+
+			return;
+		};
+
+		if let Some((_, included, directive_span)) = graph
+			.edges_directed(included_id, petgraph::Direction::Incoming)
+			.next()
+		{
+			let other_path = paths.resolve(included);
+			let other_uri = Url::from_file_path(other_path).unwrap();
+
+			let other_loc = Location {
+				uri: other_uri,
+				range: *directive_span,
+			};
+
+			let diag_builder = src
+				.diag_builder(
+					lit.syntax().text_range(),
+					DiagnosticSeverity::WARNING,
+					format!("file has already been included: {}", full_path.display()),
+				)
+				.with_related(DiagnosticRelatedInformation {
+					location: other_loc,
+					message: "file has already been included from here".to_string(),
+				});
+
+			diags.push(diag_builder.0);
+		}
+
+		let directive_span = src.make_range(directive.syntax().text_range());
+		graph.add_edge(src.id, included_id, directive_span);
+	}
+}
+
+pub(crate) fn compose_include_path(
+	paths: &PathInterner,
+	project_root: &Path,
+	src: &Source,
+	lit: &LitToken<Syn>,
+	lit_str: &str,
+) -> Result<PathBuf, Diagnostic> {
+	let inc_path = Path::new(lit_str);
+
+	let mut inc_path_components = inc_path.components();
+
+	let inc_path_absolute = matches!(
+		inc_path_components.next(),
+		Some(std::path::Component::RootDir)
+	);
+
+	let full_path = if inc_path_absolute {
+		project_root.join(inc_path_components.collect::<PathBuf>())
+	} else {
+		let parent = paths.resolve(src.id).parent().unwrap();
+		let joined = parent.join(inc_path);
+
+		match joined.canonicalize() {
+			Ok(p) => p,
+			Err(_) => {
+				return Err(src
+					.diag_builder(
+						lit.syntax().text_range(),
+						DiagnosticSeverity::ERROR,
+						format!(
+							"malformed include path or non-existent file: {}",
+							joined.display(),
+						),
+					)
+					.0);
+			}
+		}
+	};
+
+	Ok(full_path)
 }

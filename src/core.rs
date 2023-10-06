@@ -30,11 +30,12 @@ use crate::{
 		Definition, FileSpan, InternalDb, ScopePtr, SymGraphKey, SymGraphVal, SymPtr, SymbolId,
 		UserSymbol,
 	},
+	error::Error,
 	intern::{NameInterner, NsName, PathInterner, PathIx},
 	langs::{self, LangId},
 	lines::{self, LineCol, LineIndex},
 	util::{self, DiagBuilder},
-	FxDashMap, FxDashView, FxHamt,
+	FxDashMap, FxDashView, FxHamt, UnitResult,
 };
 
 #[derive(Debug)]
@@ -46,6 +47,10 @@ pub(crate) struct Core {
 	pub(crate) working: Arc<Mutex<WorkingWorld>>,
 }
 
+/// A conceptual "compilation unit" of sorts.
+///
+/// Represents one game modification (or standalone game) made to be loaded
+/// to the user's source port of choice.
 #[derive(Debug, Clone)]
 pub(crate) struct Project {
 	pub(crate) root: PathBuf,
@@ -85,8 +90,8 @@ impl Core {
 			})
 	}
 
-	#[must_use]
 	#[allow(unused)]
+	#[must_use]
 	pub(crate) fn project_by_child_mut(
 		&mut self,
 		child_path: &Path,
@@ -106,6 +111,11 @@ impl Core {
 			.files
 			.get(&sym.id.file_id)
 			.unwrap()
+	}
+
+	#[allow(unused)]
+	pub(crate) fn all_files(&self) -> impl Iterator<Item = &Source> {
+		self.pending.projects.iter().flat_map(|p| p.files.values())
 	}
 
 	#[must_use]
@@ -132,23 +142,36 @@ impl Core {
 			return;
 		}
 
-		let mut dirty = std::mem::take(&mut self.pending.dirty);
-
 		self.pending.sema_invalid = true;
 
+		let paths = Arc::clone(&self.paths);
+		let mut dirty = std::mem::take(&mut self.pending.dirty);
+
+		let mut zs_vers_change = vec![];
+
 		for (file_id, params) in dirty.drain() {
-			let (_, project) = self.project_with_mut(file_id).unwrap();
+			let uri;
+
+			let (project_ix, project) = self.project_with_mut(file_id).unwrap();
+			let files = project.files.clone();
 			let src = project.files.get_mut(&file_id).unwrap();
 
-			let deltas = lines::splice_changes(&mut src.text, params.content_changes);
+			let deltas = if let Some(p) = params {
+				uri = p.text_document.uri;
+				lines::splice_changes(&mut src.text, p.content_changes)
+			} else {
+				uri = Url::from_file_path(paths.resolve(file_id)).unwrap();
+				None
+			};
+
 			// TODO:
 			// - try reducing how many times the line index needs to be recomputed
 			// - partial reparsing
-			// - include tree changes
-			// - ZScript version changes
+			// - DECORATE include tree changes
+
 			src.lines = LineIndex::new(&src.text);
 
-			let (green, diags) = if let Some(_deltas) = deltas {
+			let (green, mut diags) = if let Some(_deltas) = deltas {
 				match src.lang {
 					LangId::Unknown => continue,
 					LangId::CVarInfo | LangId::Decorate => unimplemented!(),
@@ -164,32 +187,117 @@ impl Core {
 
 			src.green = Some(green);
 
+			if project.zscript.root.is_some_and(|r| r == file_id) {
+				for prev_nb in project.zscript.invalidate_includer(file_id) {
+					if project.zscript.includes.neighbors(prev_nb).next().is_some() {
+						continue;
+					}
+
+					let nb_uri = Url::from_file_path(paths.resolve(prev_nb)).unwrap();
+					util::clear_diags(conn, nb_uri);
+				}
+
+				let prev_vers = project.zscript.version;
+
+				match langs::zscript::parse::resolve_version(src) {
+					Ok(vers) => project.zscript.version = vers,
+					Err(diag) => diags.push(diag),
+				}
+
+				if project.zscript.version != prev_vers {
+					zs_vers_change.push(project_ix);
+				}
+
+				let graph = &mut project.zscript.includes;
+
+				langs::zscript::inctree::get_includes(
+					paths.as_ref(),
+					&project.root,
+					files,
+					graph,
+					src,
+					&mut diags,
+				);
+			} else if project.zscript.includes.contains_node(file_id) {
+				for prev_nb in project.zscript.invalidate_includer(file_id) {
+					if project.zscript.includes.neighbors(prev_nb).next().is_some() {
+						continue;
+					}
+
+					let nb_uri = Url::from_file_path(paths.resolve(prev_nb)).unwrap();
+					util::clear_diags(conn, nb_uri);
+				}
+
+				let graph = &mut project.zscript.includes;
+
+				langs::zscript::inctree::get_includes(
+					paths.as_ref(),
+					&project.root,
+					files,
+					graph,
+					src,
+					&mut diags,
+				);
+			}
+
 			if !diags.is_empty() {
 				let _ = self.pending.malformed.insert(file_id, diags.clone());
 			} else {
 				let _ = self.pending.malformed.remove(&file_id);
 			}
 
-			let result = conn.sender.send(Message::Notification(Notification {
-				method: <PublishDiagnostics as lsp_types::notification::Notification>::METHOD
-					.to_string(),
-				params: serde_json::to_value(PublishDiagnosticsParams {
-					uri: params.text_document.uri,
-					diagnostics: diags,
-					version: None,
-				})
-				.unwrap(),
-			}));
-
-			if let Err(err) = result {
-				error!("Failed to send a diagnostic: {err}");
-			}
+			util::send_diags(conn, uri, diags);
 		}
 
 		self.pending.dirty = dirty;
+
+		for v in zs_vers_change {
+			let project = &self.pending.projects[v];
+
+			for src in project.zscript.files(project) {
+				self.pending.dirty.insert(src.id, None);
+			}
+		}
 	}
 
-	pub(crate) fn add_file(&mut self, project_ix: usize, mut src: Source) -> Source {
+	pub(crate) fn on_file_create(&mut self, path: PathBuf) -> UnitResult {
+		let file_id = self.paths.intern(&path);
+
+		let Some((i, _)) = self.project_by_child(&path) else {
+			return Ok(());
+		};
+
+		let text = std::fs::read_to_string(&path).map_err(Error::from)?;
+		let lines = LineIndex::new(&text);
+
+		let mut src = Source {
+			id: file_id,
+			lang: LangId::Unknown,
+			text,
+			green: None,
+			lines,
+		};
+
+		let src = if self.pending.projects[i]
+			.zscript
+			.includes
+			.contains_node(file_id)
+		{
+			// TODO: similar handling will need to be applied to the DECORATE root,
+			// and other such special root-directory files identifiable by their path stem.
+			src.lang = LangId::ZScript;
+			self.parse_new_file(i, src)
+		} else {
+			src
+		};
+
+		self.pending.dirty.insert(file_id, None);
+		self.pending.projects[i].files.insert(file_id, src.clone());
+
+		Ok(())
+	}
+
+	pub(crate) fn parse_new_file(&mut self, project_ix: usize, mut src: Source) -> Source {
 		let (green, diags) = match src.lang {
 			LangId::ZScript => {
 				let vers = self.pending.projects[project_ix].zscript.version;
@@ -208,7 +316,7 @@ impl Core {
 		src
 	}
 
-	pub(crate) fn on_file_delete(&mut self, file_id: PathIx) {
+	pub(crate) fn on_file_delete(&mut self, conn: &Connection, file_id: PathIx) {
 		let _ = self.pending.dirty.remove(&file_id);
 		let _ = self.pending.malformed.remove(&file_id);
 
@@ -217,16 +325,31 @@ impl Core {
 		};
 
 		self.pending.projects[i].files.remove(&file_id);
-
 		let project = &mut self.pending.projects[i];
 
-		if project.zscript.root.is_some_and(|r| r == file_id) {
-			project.zscript.root = None;
-			project.zscript.includes.clear();
-			project.zscript.version = zdoom::Version::V2_4_0;
-		} else if let Some(_) = project.zscript.includes.get(&file_id).copied() {
-			// TODO
+		{
+			if project.zscript.root.is_some_and(|r| r == file_id) {
+				project.zscript.root = None;
+				project.zscript.includes.clear();
+				project.zscript.version = zdoom::Version::V2_4_0;
+			}
+
+			if project.zscript.root.is_none() {
+				if let Ok(root_reader) = util::root_dir_reader(conn, &project.root) {
+					for p in root_reader {
+						let Some(fstem) = p.file_stem() else {
+							continue;
+						};
+
+						if fstem.eq_ignore_ascii_case("zscript") {
+							project.zscript.root = Some(self.paths.intern(&p));
+						}
+					}
+				}
+			}
 		}
+
+		self.pending.sema_invalid = true;
 	}
 
 	#[must_use]
@@ -365,7 +488,7 @@ pub(crate) struct PendingWorld {
 	/// Pending will not be sent to Working unless this map is empty.
 	pub(crate) malformed: FxHashMap<PathIx, Vec<Diagnostic>>,
 	/// Files that have had text content changes and need to be re-parsed.
-	pub(crate) dirty: FxHashMap<PathIx, DidChangeTextDocumentParams>,
+	pub(crate) dirty: FxHashMap<PathIx, Option<DidChangeTextDocumentParams>>,
 	/// Every time a `textDocument/didChange` notification arrives, this is updated
 	/// to the current time. The dirty file list is not re-parsed until this
 	/// a certain amount of time has elapsed since this, since there's no use

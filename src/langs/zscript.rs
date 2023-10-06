@@ -6,6 +6,7 @@ pub(crate) mod decl;
 pub(crate) mod define;
 pub(crate) mod docsym;
 pub(crate) mod expand;
+pub(crate) mod goto_def;
 pub(crate) mod hover;
 pub(crate) mod inctree;
 pub(crate) mod internal;
@@ -21,6 +22,7 @@ use doomfront::{
 	},
 };
 use lsp_types::SymbolKind;
+use petgraph::prelude::DiGraphMap;
 use rayon::prelude::*;
 use tracing::debug;
 
@@ -30,7 +32,6 @@ use crate::{
 	data::{SymGraphKey, SymGraphVal, SymPtr, UserSymbol},
 	frontend::FrontendContext,
 	intern::{NsName, PathIx},
-	FxHamt,
 };
 
 use self::sema::{Datum, FunctionFlags};
@@ -39,18 +40,41 @@ use self::sema::{Datum, FunctionFlags};
 pub(crate) struct IncludeTree {
 	pub(crate) root: Option<PathIx>,
 	pub(crate) version: zdoom::Version,
-	/// Keys are IDs of the "included"; values are IDs of "includers".
-	pub(crate) includes: FxHamt<PathIx, PathIx>,
+	/// Edges are from "includer" to "included", and hold the span of the include
+	/// directive's AST node.
+	/// Note that a file ID may be a present node even if there is no file with
+	/// that ID in any project in the workspace; these nodes will still have edges.
+	pub(crate) includes: DiGraphMap<PathIx, lsp_types::Range>,
 }
 
 impl IncludeTree {
+	#[must_use]
+	pub(crate) fn invalidate_includer(&mut self, file_id: PathIx) -> Vec<PathIx> {
+		debug_assert!(self.includes.contains_node(file_id));
+
+		let prev_nb: Vec<_> = self
+			.includes
+			.neighbors_directed(file_id, petgraph::Direction::Outgoing)
+			.collect();
+
+		for nb in prev_nb.iter().copied() {
+			self.includes.remove_edge(file_id, nb);
+		}
+
+		prev_nb
+	}
+
 	/// All included files as well as the root.
 	pub(crate) fn files<'p>(&'p self, project: &'p Project) -> impl Iterator<Item = &Source> + 'p {
-		let root_id = self.root.unwrap();
+		if let Some(r) = self.root {
+			debug_assert!(self.includes.contains_node(r));
+		} else {
+			debug_assert_eq!(self.includes.node_count(), 0);
+		}
 
-		std::iter::once(root_id)
-			.chain(self.includes.keys().copied())
-			.map(|id| project.files.get(&id).unwrap())
+		self.includes
+			.nodes()
+			.filter_map(|file_id| project.files.get(&file_id))
 	}
 }
 
@@ -59,7 +83,7 @@ impl Default for IncludeTree {
 		Self {
 			root: None,
 			version: zdoom::Version::V2_4_0,
-			includes: FxHamt::default(),
+			includes: DiGraphMap::default(),
 		}
 	}
 }

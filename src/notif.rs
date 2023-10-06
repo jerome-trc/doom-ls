@@ -9,7 +9,7 @@ use lsp_types::{
 	Diagnostic, DiagnosticSeverity, Position, PublishDiagnosticsParams, Url,
 };
 
-use crate::{core::Source, langs::LangId, lines::LineIndex, util, Core, Error, UnitResult};
+use crate::{langs::LangId, util, Core, Error, UnitResult};
 
 pub(super) fn handle(
 	core: &mut Core,
@@ -26,7 +26,7 @@ pub(super) fn handle(
 			return Ok(());
 		};
 
-		core.pending.dirty.insert(file_id, params);
+		core.pending.dirty.insert(file_id, Some(params));
 
 		Ok(())
 	})?;
@@ -61,7 +61,7 @@ pub(super) fn handle(
 			};
 		}
 
-		if src.lang == LangId::ZScript && !project.zscript.includes.contains_key(&file_id) {
+		if src.lang == LangId::ZScript && !project.zscript.includes.contains_node(file_id) {
 			conn.sender
 				.send(Message::Notification(unincluded_diag_notif(
 					params.text_document.uri.clone(),
@@ -89,9 +89,9 @@ pub(super) fn handle(
 		for renamed in params.files {
 			let old_path = util::parse_uri(&renamed.old_uri)?;
 			let new_path = util::parse_uri(&renamed.new_uri)?;
-			// TODO
-			let _ = core.paths.intern(&old_path);
-			let _ = core.paths.intern(&new_path);
+
+			core.on_file_delete(conn, core.paths.intern(&old_path));
+			core.on_file_create(new_path)?;
 		}
 
 		Ok(())
@@ -100,35 +100,7 @@ pub(super) fn handle(
 	notif = try_notif::<DidCreateFiles, _>(notif, |params| {
 		for created in params.files {
 			let path = util::parse_uri(&created.uri)?;
-			let file_id = core.paths.intern(&path);
-
-			let Some((i, _)) = core.project_by_child(&path) else {
-				continue;
-			};
-
-			let text = std::fs::read_to_string(&path).map_err(Error::from)?;
-			let lines = LineIndex::new(&text);
-
-			let mut src = Source {
-				id: file_id,
-				lang: LangId::Unknown,
-				text,
-				green: None,
-				lines,
-			};
-
-			let src = if core.pending.projects[i]
-				.zscript
-				.includes
-				.contains_key(&file_id)
-			{
-				src.lang = LangId::ZScript;
-				core.add_file(i, src)
-			} else {
-				src
-			};
-
-			core.pending.projects[i].files.insert(file_id, src.clone());
+			core.on_file_create(path)?;
 		}
 
 		Ok(())
@@ -138,7 +110,7 @@ pub(super) fn handle(
 		for deletion in params.files {
 			let path = util::parse_uri(&deletion.uri)?;
 			let file_id = core.paths.intern_owned(path);
-			core.on_file_delete(file_id);
+			core.on_file_delete(conn, file_id);
 		}
 
 		Ok(())

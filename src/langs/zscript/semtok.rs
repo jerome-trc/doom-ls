@@ -392,6 +392,20 @@ fn highlight_non_ident(ctx: &request::Context, hl: &mut Highlighter, token: Synt
 }
 
 fn highlight_string_literal(_: &request::Context, hl: &mut Highlighter, token: SyntaxToken) {
+	if let Some(parent) = token.parent() {
+		match parent.kind() {
+			Syn::IncludeDirective => {
+				hl.advance_mod(SemToken::String, token.text_range(), SemTokenFlags::LINK);
+				return;
+			}
+			Syn::DeprecationQual | Syn::StateLight | Syn::VersionQual | Syn::VersionDirective => {
+				hl.advance(SemToken::String, token.text_range());
+				return;
+			}
+			_ => {}
+		}
+	}
+
 	static REGEX: OnceLock<Regex> = OnceLock::new();
 
 	let rgx = REGEX.get_or_init(|| {

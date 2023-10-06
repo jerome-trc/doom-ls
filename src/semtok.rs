@@ -62,6 +62,7 @@ bitflags::bitflags! {
 		const READONLY = 1 << 1;
 		const MEMBER = 1 << 2;
 		const CONTROL_FLOW = 1 << 3;
+		const LINK = 1 << 4;
 	}
 }
 
@@ -151,6 +152,7 @@ pub(crate) fn legend() -> SemanticTokensLegend {
 		SemanticTokenModifier::READONLY,
 		SemanticTokenModifier::new("member"),
 		SemanticTokenModifier::new("controlFlow"),
+		SemanticTokenModifier::new("link"),
 	];
 
 	SemanticTokensLegend {

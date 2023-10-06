@@ -65,6 +65,7 @@ pub(crate) fn logging() {
 #[must_use]
 pub(crate) fn capabilities() -> ServerCapabilities {
 	ServerCapabilities {
+		definition_provider: Some(OneOf::Left(true)),
 		document_symbol_provider: Some(OneOf::Left(true)),
 		hover_provider: Some(HoverProviderCapability::Simple(true)),
 		semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
@@ -80,7 +81,6 @@ pub(crate) fn capabilities() -> ServerCapabilities {
 
 		TODO
 
-		definition_provider: Some(OneOf::Left(true)),
 		references_provider: Some(OneOf::Left(true)),
 
 		*/

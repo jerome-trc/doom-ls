@@ -6,8 +6,8 @@ use lsp_server::{
 };
 use lsp_types::{
 	request::{
-		DocumentSymbolRequest, HoverRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
-		WorkspaceSymbolRequest,
+		DocumentSymbolRequest, GotoDefinition, HoverRequest, SemanticTokensFullRequest,
+		SemanticTokensRangeRequest, WorkspaceSymbolRequest,
 	},
 	MessageType, SymbolInformation, TextDocumentIdentifier, WorkspaceSymbolResponse,
 };
@@ -18,6 +18,7 @@ use crate::{
 	core::{Project, Source},
 	data::{SymGraphKey, SymGraphVal, Symbol},
 	langs::{self, LangId},
+	lines::LineCol,
 	util, Core, Error, UnitResult,
 };
 
@@ -140,6 +141,53 @@ pub(super) fn handle(
 			LangId::Unknown => util::respond_null(conn, id),
 			LangId::CVarInfo | LangId::Decorate => util::respond_null(conn, id), // TODO
 			LangId::ZScript => langs::zscript::docsym::handle(conn, src, id),
+		}
+	})?;
+
+	req = try_request::<GotoDefinition, _>(req, |id, params| {
+		let path = util::uri_to_pathbuf(&params.text_document_position_params.text_document.uri)?;
+		let file_id = core.paths.intern(&path);
+
+		let Some((_, project)) = core.project_with(file_id) else {
+			return util::respond_null(conn, id);
+		};
+
+		let src = project.files.get(&file_id).unwrap();
+
+		let ctx = Context {
+			core,
+			conn,
+			project,
+			id,
+			src,
+		};
+
+		let lc = LineCol {
+			line: params.text_document_position_params.position.line,
+			col: params.text_document_position_params.position.character,
+		};
+
+		let Some(offs) = src.lines.offset(lc) else {
+			return util::respond_err(
+				conn,
+				ctx.id,
+				ResponseError {
+					code: ErrorCode::InvalidParams as i32,
+					message: format!(
+						"invalid position {}:{} in document {}",
+						lc.line,
+						lc.col,
+						path.display()
+					),
+					data: None,
+				},
+			);
+		};
+
+		match src.lang {
+			LangId::Unknown => util::respond_null(conn, ctx.id),
+			LangId::CVarInfo | LangId::Decorate => util::respond_null(conn, ctx.id), // TODO
+			LangId::ZScript => langs::zscript::goto_def::handle(ctx, offs),
 		}
 	})?;
 
