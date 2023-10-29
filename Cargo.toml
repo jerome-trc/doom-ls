@@ -29,6 +29,7 @@ codegen-units = 4
 doomfront = { path = "../viletech/doomfront", features = [
 	"zdoom",
 ] } # Temporary local path.
+vtutil = { package = "viletech-utils", path = "../viletech/utils" }
 
 append-only-vec = "0.1.3"
 bitflags = "2.3.1"
