@@ -11,6 +11,7 @@ use rustc_hash::FxHasher;
 
 pub mod error;
 pub mod front;
+pub mod lines;
 pub mod pathintern;
 
 pub type ErrorBox = Box<dyn std::error::Error + Send + Sync>;
