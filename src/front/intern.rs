@@ -12,24 +12,24 @@ use crate::FxDashMap;
 
 /// An index into a [`NameInterner`]. Used for symbol lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct NameIx(u32);
+pub struct NameIx(u32);
 
 /// A concurrent interner for [`IName`], allowing [32-bit indices](NameIx)
 /// to be used as [map keys](crate::Scope) in place of pointers.
 #[derive(Debug, Default)]
-pub(crate) struct NameInterner {
+pub struct NameInterner {
 	array: PushVec<IName>,
 	map: FxDashMap<IName, NameIx>,
 }
 
 impl NameInterner {
 	#[must_use]
-	pub(crate) fn intern(&self, token: &SyntaxToken) -> NameIx {
+	pub fn intern(&self, token: &SyntaxToken) -> NameIx {
 		self.add(token.green().to_owned())
 	}
 
 	#[must_use]
-	pub(crate) fn resolve(&self, ix: NameIx) -> &str {
+	pub fn resolve(&self, ix: NameIx) -> &str {
 		Borrow::borrow(&self.array[ix.0 as usize])
 	}
 
