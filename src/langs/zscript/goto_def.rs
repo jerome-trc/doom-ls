@@ -50,7 +50,7 @@ pub(crate) fn handle(ctx: request::Context, pos: TextSize) -> UnitResult {
 fn include_directive_path(
 	ctx: request::Context,
 	_: SyntaxToken,
-	include: ast::IncludeDirective,
+	directive: ast::IncludeDirective,
 ) -> UnitResult {
 	if ctx.project.zscript.root.is_none() {
 		#[cfg(debug_assertions)]
@@ -59,31 +59,20 @@ fn include_directive_path(
 		return util::respond_null(ctx.conn, ctx.id);
 	}
 
-	let Ok(lit) = include.argument() else {
+	let Some(uncanon) = directive.include_path(&ctx.project.root, || {
+		ctx.core.paths.resolve(ctx.src.id).parent().unwrap()
+	}) else {
 		#[cfg(debug_assertions)]
-		debug!("Goto-def miss - malformed include directive.");
+		debug!("Goto-def miss - parsing error");
 
 		return util::respond_null(ctx.conn, ctx.id);
 	};
 
-	let Some(lit_str) = lit.string() else {
-		#[cfg(debug_assertions)]
-		debug!("Goto-def miss - include directive has no string argument.");
-
-		return util::respond_null(ctx.conn, ctx.id);
-	};
-
-	let full_path = match super::inctree::compose_include_path(
-		&ctx.core.paths,
-		&ctx.project.root,
-		ctx.src,
-		&lit,
-		lit_str,
-	) {
+	let full_path = match uncanon.canonicalize() {
 		Ok(p) => p,
-		Err(diag) => {
+		Err(_) => {
 			#[cfg(debug_assertions)]
-			debug!("Goto-def miss - {}", diag.message);
+			debug!("Goto-def miss - canonicalization");
 
 			return util::respond_null(ctx.conn, ctx.id);
 		}

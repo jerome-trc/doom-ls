@@ -24,7 +24,7 @@ pub(crate) fn declare_class(ctx: &FrontendContext, ast: ast::ClassDef) {
 	drop(globals);
 
 	if let Err(prev) = result {
-		let crit_span = super::symbol_crit_span(ast.syntax());
+		let crit_span = super::help::symbol_crit_span(ast.syntax());
 		redeclare_error(ctx, prev, crit_span, ident.text());
 	}
 }
@@ -48,7 +48,7 @@ pub(crate) fn declare_constant(
 		redeclare_error(
 			ctx,
 			prev,
-			super::symbol_crit_span(ast.syntax()),
+			super::help::symbol_crit_span(ast.syntax()),
 			ident.text(),
 		);
 	}
@@ -75,7 +75,7 @@ pub(crate) fn declare_enum(
 			redeclare_error(
 				ctx,
 				prev,
-				super::symbol_crit_span(ast.syntax()),
+				super::help::symbol_crit_span(ast.syntax()),
 				ident.text(),
 			);
 			None
@@ -127,7 +127,7 @@ pub(crate) fn declare_field(
 				redeclare_error(
 					ctx,
 					prev,
-					super::symbol_crit_span(var_name.syntax()),
+					super::help::symbol_crit_span(var_name.syntax()),
 					ident.text(),
 				);
 			}
@@ -158,7 +158,7 @@ pub(crate) fn declare_flagdef(
 			redeclare_error(
 				ctx,
 				prev,
-				super::symbol_crit_span(ast.syntax()),
+				super::help::symbol_crit_span(ast.syntax()),
 				ident.text(),
 			);
 		}
@@ -186,14 +186,14 @@ pub(crate) fn declare_flagdef(
 		}
 		Err(prev) => {
 			let mut b = ctx.src.diag_builder(
-				super::symbol_crit_span(ast.syntax()),
+				super::help::symbol_crit_span(ast.syntax()),
 				DiagnosticSeverity::ERROR,
 				format!("flagdef's fake boolean `{varname}` shadows a field"),
 			);
 
 			if let Some(u_sym) = prev.as_user() {
 				b = b.with_related(DiagnosticRelatedInformation {
-					location: ctx.diag_location(u_sym, super::symbol_crit_span),
+					location: ctx.diag_location(u_sym, super::help::symbol_crit_span),
 					message: "field is declared here".to_string(),
 				});
 			}
@@ -224,7 +224,7 @@ pub(crate) fn declare_function(
 				redeclare_error(
 					ctx,
 					prev,
-					super::symbol_crit_span(ast.syntax()),
+					super::help::symbol_crit_span(ast.syntax()),
 					ident.text(),
 				);
 			}
@@ -268,7 +268,7 @@ pub(crate) fn declare_mixin_class(ctx: &FrontendContext, ast: ast::MixinClassDef
 		redeclare_error(
 			ctx,
 			prev,
-			super::symbol_crit_span(ast.syntax()),
+			super::help::symbol_crit_span(ast.syntax()),
 			ident.text(),
 		);
 	}
@@ -297,7 +297,7 @@ pub(crate) fn declare_property(
 			redeclare_error(
 				ctx,
 				prev,
-				super::symbol_crit_span(ast.syntax()),
+				super::help::symbol_crit_span(ast.syntax()),
 				ident.text(),
 			);
 		}
@@ -328,7 +328,7 @@ pub(crate) fn declare_state_labels(
 				redeclare_error(
 					ctx,
 					prev,
-					super::symbol_crit_span(label.syntax()),
+					super::help::symbol_crit_span(label.syntax()),
 					name_tok.text(),
 				);
 			}
@@ -350,7 +350,7 @@ pub(crate) fn declare_static_const(
 		redeclare_error(
 			ctx,
 			prev,
-			super::symbol_crit_span(ast.syntax()),
+			super::help::symbol_crit_span(ast.syntax()),
 			ident.text(),
 		);
 	}
@@ -396,7 +396,7 @@ pub(crate) fn declare_struct(
 		redeclare_error(
 			ctx,
 			prev,
-			super::symbol_crit_span(ast.syntax()),
+			super::help::symbol_crit_span(ast.syntax()),
 			ident.text(),
 		);
 	}
@@ -413,12 +413,12 @@ pub(super) fn redeclare_error(
 	let mut b = ctx.src.diag_builder(
 		crit_span,
 		DiagnosticSeverity::ERROR,
-		format!("attempt to re-declare symbol `{}`", name_str),
+		format!("attempt to re-declare symbol `{name_str}`"),
 	);
 
 	if let Some(u_sym) = prev.as_user() {
 		b = b.with_related(DiagnosticRelatedInformation {
-			location: ctx.diag_location(u_sym, super::symbol_crit_span),
+			location: ctx.diag_location(u_sym, super::help::symbol_crit_span),
 			message: "original declaration is here".to_string(),
 		});
 	}

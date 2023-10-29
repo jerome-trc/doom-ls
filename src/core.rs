@@ -123,7 +123,7 @@ impl Core {
 		match u_sym.def.as_ref() {
 			None => None,
 			Some(Definition::ZScript(datum)) => {
-				Some(langs::zscript::decl_text(self, sym_ptr, u_sym, datum))
+				Some(langs::zscript::help::decl_text(self, sym_ptr, u_sym, datum))
 			}
 			Some(Definition::_CVarInfo(_)) => unimplemented!(),
 		}

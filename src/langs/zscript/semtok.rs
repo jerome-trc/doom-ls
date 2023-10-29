@@ -148,16 +148,18 @@ fn highlight_ident(ctx: &request::Context, hl: &mut Highlighter, token: SyntaxTo
 
 fn highlight_by_definition(hl: &mut Highlighter, token: SyntaxToken, def: &Definition) {
 	match def {
-		Definition::ZScript(sema::Datum::Class) => {
+		Definition::ZScript(sema::Datum::Class(_)) => {
 			hl.advance(SemToken::Class, token.text_range());
 		}
 		Definition::ZScript(sema::Datum::Constant) => {
 			hl.advance(SemToken::Constant, token.text_range());
 		}
-		Definition::ZScript(sema::Datum::_Enum) => {
+		Definition::ZScript(sema::Datum::Enum(_)) => {
 			hl.advance(SemToken::Enum, token.text_range());
 		}
-		Definition::ZScript(sema::Datum::_Field(sema::Field { flags, deprecated })) => {
+		Definition::ZScript(sema::Datum::Field(sema::Field {
+			flags, deprecated, ..
+		})) => {
 			hl.advance_mod(SemToken::Property, token.text_range(), {
 				let mut stf = SemTokenFlags::MEMBER;
 
@@ -200,10 +202,10 @@ fn highlight_by_definition(hl: &mut Highlighter, token: SyntaxToken, def: &Defin
 		Definition::ZScript(sema::Datum::_MixinClass) => {
 			hl.advance(SemToken::Macro, token.text_range());
 		}
-		Definition::ZScript(sema::Datum::_Primitive) => {
+		Definition::ZScript(sema::Datum::Primitive(_)) => {
 			hl.advance(SemToken::Keyword, token.text_range());
 		}
-		Definition::ZScript(sema::Datum::_Struct) => {
+		Definition::ZScript(sema::Datum::Struct(_)) => {
 			hl.advance(SemToken::Struct, token.text_range());
 		}
 		Definition::_CVarInfo(_) => {} // TODO

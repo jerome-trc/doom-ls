@@ -87,7 +87,23 @@ fn ident(ctx: &request::Context, token: SyntaxToken) -> Option<HoverContents> {
 			let syn_node = origin_src.node_covering(u_sym.id.span);
 
 			if u_sym.lang == LangId::ZScript {
-				if let Some(documentable) = ast::Documentable::cast(syn_node) {
+				if let Some(documentable) = ast::Documentable::cast(syn_node.clone()) {
+					let mut doc_string = String::new();
+
+					for doc in documentable.docs() {
+						doc_string.push_str(doc.text_trimmed());
+						doc_string.push(' ');
+					}
+
+					doc_string.pop();
+
+					strings.push(MarkedString::String(doc_string));
+				}
+
+				// Frontend symbols come from `VarName` nodes, but their parent
+				// `FielDecl` nodes are what get documented.
+
+				if let Some(documentable) = syn_node.parent().and_then(ast::Documentable::cast) {
 					let mut doc_string = String::new();
 
 					for doc in documentable.docs() {

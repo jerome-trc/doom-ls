@@ -2,7 +2,10 @@ use doomfront::{
 	rowan::ast::AstNode,
 	zdoom::{
 		self,
-		zscript::{ast, Syn},
+		zscript::{
+			ast::{self, MemberQualSet},
+			Syn,
+		},
 	},
 };
 use lsp_types::{DiagnosticRelatedInformation, DiagnosticSeverity};
@@ -15,6 +18,8 @@ use crate::{
 	langs::zscript::sema::{self, FunctionFlags},
 };
 
+use super::Holder;
+
 pub(crate) fn define(
 	ctx: &FrontendContext,
 	sym_ptr: SymPtr,
@@ -25,17 +30,46 @@ pub(crate) fn define(
 	ctx.make_ref_to(ast.name().text_range(), sym_ptr.clone());
 
 	let mut datum = sema::Function {
+		params: vec![],
 		flags: FunctionFlags::empty(),
-		scope: sema::Scope::Data,
-		_min_version: zdoom::Version::V1_0_0,
+		scope: sema::Scope::Data, // TODO: inherit from holder.
+		min_version: None,
 		vis: sema::Visibility::Public,
 		deprecated: None,
 	};
 
+	let quals = ast.qualifiers();
+	let qualset = MemberQualSet::new(&quals, |prev_span, repeated| {
+		match repeated {
+			ast::MemberQual::Action(_) => todo!(),
+			ast::MemberQual::Deprecation(_) => todo!(),
+			ast::MemberQual::Version(_) => todo!(),
+			ast::MemberQual::Abstract(_) => todo!(),
+			ast::MemberQual::ClearScope(_) => todo!(),
+			ast::MemberQual::Final(_) => todo!(),
+			ast::MemberQual::Override(_) => todo!(),
+			ast::MemberQual::Static(_) => todo!(),
+			ast::MemberQual::Virtual(_) => todo!(),
+			ast::MemberQual::VirtualScope(_) => todo!(),
+			// Scope qualifiers get processed later.
+			ast::MemberQual::Play(_) | ast::MemberQual::Ui(_) => return,
+			// Visibility qualifiers get processed later.
+			ast::MemberQual::Private(_) | ast::MemberQual::Protected(_) => return,
+			// Useless to user code. Diagnostics get raised about these later.
+			ast::MemberQual::Internal(_)
+			| ast::MemberQual::Native(_)
+			| ast::MemberQual::VarArg(_) => return,
+			// Inapplicable to functions. Diagnostics get raised about these later.
+			ast::MemberQual::Meta(_)
+			| ast::MemberQual::ReadOnly(_)
+			| ast::MemberQual::Transient(_) => return,
+		}
+	});
+
 	if class_member {
-		class_function(ctx, sym_ptr.clone(), ast, &mut datum);
+		class_function(ctx, sym_ptr.clone(), ast, quals, qualset, &mut datum);
 	} else {
-		struct_function(ctx, sym_ptr.clone(), ast, &mut datum);
+		struct_function(ctx, sym_ptr.clone(), ast, quals, qualset, &mut datum);
 	}
 
 	let mut bump = ctx.arena.borrow();
@@ -47,13 +81,11 @@ fn class_function(
 	ctx: &FrontendContext,
 	sym_ptr: SymPtr,
 	ast: ast::FunctionDecl,
+	quals: ast::MemberQuals,
+	qualset: MemberQualSet,
 	datum: &mut sema::Function,
 ) {
-	let quals = ast.qualifiers();
-	let qualset = set_of_qualifiers(ctx, &quals);
-
-	process_scope_qualifiers(ctx, &quals, &qualset, datum);
-	process_static_and_const(ctx, &ast, &qualset, datum);
+	process_qualifiers(ctx, &ast, &quals, &qualset, datum);
 
 	// TODO
 	if let Some(sgn) = ctx.sym_graph.get(&SymGraphKey::PrototypeFor(sym_ptr)) {
@@ -69,15 +101,13 @@ fn struct_function(
 	ctx: &FrontendContext,
 	_: SymPtr,
 	ast: ast::FunctionDecl,
+	quals: ast::MemberQuals,
+	qualset: MemberQualSet,
 	datum: &mut sema::Function,
 ) {
-	let quals = ast.qualifiers();
-	let qualset = set_of_qualifiers(ctx, &quals);
+	process_qualifiers(ctx, &ast, &quals, &qualset, datum);
 
-	process_scope_qualifiers(ctx, &quals, &qualset, datum);
-	process_static_and_const(ctx, &ast, &qualset, datum);
-
-	match (qualset.get(&Syn::KwProtected), qualset.get(&Syn::KwPrivate)) {
+	match (qualset.q_protected.as_ref(), qualset.q_private.as_ref()) {
 		(None, None) => {}
 		(None, Some(_private_kw)) => {
 			datum.vis = sema::Visibility::Private;
@@ -109,15 +139,15 @@ fn struct_function(
 		}
 	}
 
-	if let Some(q) = qualset.get(&Syn::ActionQual) {
+	if let Some(q) = qualset.q_action.as_ref() {
 		ctx.raise(ctx.src.diag_builder(
-			q.text_range(),
+			q.syntax().text_range(),
 			DiagnosticSeverity::ERROR,
 			"only methods of classes inheriting from `Actor` can be marked as actions".to_string(),
 		));
 	}
 
-	if let Some(q) = qualset.get(&Syn::KwFinal) {
+	if let Some(q) = qualset.q_final.as_ref() {
 		// Note that as of GZDoom 4.10.0, this is accepted silently by the compiler.
 		ctx.raise(ctx.src.diag_builder(
 			q.text_range(),
@@ -126,7 +156,7 @@ fn struct_function(
 		));
 	}
 
-	if let Some(q) = qualset.get(&Syn::KwInternal) {
+	if let Some(q) = qualset.q_internal.as_ref() {
 		ctx.raise(ctx.src.diag_builder(
 			q.text_range(),
 			DiagnosticSeverity::WARNING,
@@ -134,7 +164,7 @@ fn struct_function(
 		));
 	}
 
-	if let Some(q) = qualset.get(&Syn::KwNative) {
+	if let Some(q) = qualset.q_native.as_ref() {
 		ctx.raise(ctx.src.diag_builder(
 			q.text_range(),
 			DiagnosticSeverity::ERROR,
@@ -142,7 +172,7 @@ fn struct_function(
 		));
 	}
 
-	if let Some(q) = qualset.get(&Syn::KwReadOnly) {
+	if let Some(q) = qualset.q_readonly.as_ref() {
 		ctx.raise(ctx.src.diag_builder(
 			q.text_range(),
 			DiagnosticSeverity::ERROR,
@@ -150,7 +180,7 @@ fn struct_function(
 		));
 	}
 
-	if let Some(q) = qualset.get(&Syn::KwTransient) {
+	if let Some(q) = qualset.q_transient.as_ref() {
 		ctx.raise(ctx.src.diag_builder(
 			q.text_range(),
 			DiagnosticSeverity::ERROR,
@@ -158,7 +188,7 @@ fn struct_function(
 		));
 	}
 
-	if let Some(q) = qualset.get(&Syn::KwVarArg) {
+	if let Some(q) = qualset.q_vararg.as_ref() {
 		ctx.raise(ctx.src.diag_builder(
 			q.text_range(),
 			DiagnosticSeverity::ERROR,
@@ -169,7 +199,7 @@ fn struct_function(
 	// Note that, as of GZDoom 4.10.0, none of these are a compiler error,
 	// but using any will cause a segfault.
 
-	if let Some(q) = qualset.get(&Syn::KwAbstract) {
+	if let Some(q) = qualset.q_abstract.as_ref() {
 		ctx.raise(ctx.src.diag_builder(
 			q.text_range(),
 			DiagnosticSeverity::ERROR,
@@ -177,7 +207,7 @@ fn struct_function(
 		));
 	}
 
-	if let Some(q) = qualset.get(&Syn::KwOverride) {
+	if let Some(q) = qualset.q_override.as_ref() {
 		ctx.raise(ctx.src.diag_builder(
 			q.text_range(),
 			DiagnosticSeverity::ERROR,
@@ -185,7 +215,7 @@ fn struct_function(
 		));
 	}
 
-	if let Some(q) = qualset.get(&Syn::KwVirtual) {
+	if let Some(q) = qualset.q_virtual.as_ref() {
 		ctx.raise(ctx.src.diag_builder(
 			q.text_range(),
 			DiagnosticSeverity::ERROR,
@@ -194,41 +224,18 @@ fn struct_function(
 	}
 }
 
-#[must_use]
-fn set_of_qualifiers(
+fn process_qualifiers(
 	ctx: &FrontendContext,
+	ast: &ast::FunctionDecl,
 	quals: &ast::MemberQuals,
-) -> FxHashMap<Syn, ast::MemberQual> {
-	let mut qualset = FxHashMap::default();
-
-	for qual in quals.iter() {
-		let displaced = qualset.insert(qual.kind(), qual);
-
-		if let Some(d_q) = displaced {
-			// Note that as of GZDoom 4.10.0, this is accepted silently by the compiler,
-			// even if it's a repeated `version` qualifier.
-			ctx.raise(ctx.src.diag_builder(
-				d_q.text_range(),
-				DiagnosticSeverity::WARNING,
-				"repeating a qualifier does nothing".to_string(),
-			));
-		}
-	}
-
-	qualset
-}
-
-fn process_scope_qualifiers(
-	ctx: &FrontendContext,
-	quals: &ast::MemberQuals,
-	qualset: &FxHashMap<Syn, ast::MemberQual>,
+	qualset: &MemberQualSet,
 	datum: &mut sema::Function,
 ) {
 	match (
-		qualset.get(&Syn::KwClearScope),
-		qualset.get(&Syn::KwPlay),
-		qualset.get(&Syn::KwUi),
-		qualset.get(&Syn::KwVirtualScope),
+		qualset.q_clearscope.as_ref(),
+		qualset.q_play.as_ref(),
+		qualset.q_ui.as_ref(),
+		qualset.q_virtualscope.as_ref(),
 	) {
 		(None, None, None, None) => {}
 		(Some(_clearscope_kw), None, None, None) => {
@@ -251,15 +258,8 @@ fn process_scope_qualifiers(
 			));
 		}
 	}
-}
 
-fn process_static_and_const(
-	ctx: &FrontendContext,
-	ast: &ast::FunctionDecl,
-	qualset: &FxHashMap<Syn, ast::MemberQual>,
-	datum: &mut sema::Function,
-) {
-	match (qualset.get(&Syn::KwStatic), ast.const_keyword()) {
+	match (qualset.q_static.as_ref(), ast.const_keyword()) {
 		(None, None) => {}
 		(None, Some(_const_kw)) => {
 			datum.flags.insert(FunctionFlags::CONST);

@@ -8,7 +8,7 @@ use crate::{
 	core::Scope,
 	intern::{NameInterner, NsName, PathIx},
 	langs::{self, LangId},
-	FxDashMapRef,
+	FxDashMapRef, FxDashMapRefMut,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -111,7 +111,7 @@ impl UserSymbol {
 	#[must_use]
 	pub(crate) fn lsp_kind(&self) -> SymbolKind {
 		match self.def.as_ref() {
-			Some(Definition::ZScript(datum)) => langs::zscript::lsp_kind(self, datum),
+			Some(Definition::ZScript(datum)) => langs::zscript::help::lsp_kind(self, datum),
 			Some(Definition::_CVarInfo(_)) => SymbolKind::VARIABLE,
 			None => SymbolKind::NULL,
 		}
@@ -131,9 +131,10 @@ impl Drop for UserSymbol {
 #[derive(Debug)]
 pub(crate) struct InternalSymbol {
 	pub(crate) lang: LangId,
+	pub(crate) name: &'static str,
 	pub(crate) decl: &'static str,
 	pub(crate) docs: &'static [&'static str],
-	pub(crate) scope: Scope,
+	pub(crate) scope: Option<Scope>,
 	pub(crate) def: Definition,
 }
 
@@ -232,6 +233,4 @@ pub(crate) type SymPtr = APtr<Symbol>;
 pub(crate) type DefPtr = APtr<Definition>;
 pub(crate) type ScopePtr = APtr<Scope>;
 
-#[allow(unused)]
-pub(crate) type SymMapRef<'m> = FxDashMapRef<'m, SymbolId, SymPtr>;
 pub(crate) type SymGraphRef<'m> = FxDashMapRef<'m, SymGraphKey, SymGraphVal>;

@@ -23,11 +23,17 @@ pub(crate) fn class_inheritance(
 	hierarchy: Vec<SymPtr>,
 ) -> Scope {
 	let mut base_scope = if let Some(parent_ident) = ast.parent_class() {
-		resolve_ancestry(ctx, &ast, parent_ident.into(), hierarchy)
+		resolve_ancestry(ctx, sym_ptr.clone(), &ast, parent_ident.into(), hierarchy)
 	} else {
 		let parent_ptr = ctx.internal.cache_zscript.class_object.clone();
 		ctx.make_child_of(parent_ptr.clone(), parent_ptr.clone());
-		parent_ptr.as_internal().unwrap().scope.clone()
+		parent_ptr
+			.as_internal()
+			.unwrap()
+			.scope
+			.as_ref()
+			.unwrap()
+			.clone()
 	};
 
 	declare_class_innards(ctx, sym_ptr, &mut base_scope, ast.innards());
@@ -37,9 +43,10 @@ pub(crate) fn class_inheritance(
 #[must_use]
 fn resolve_ancestry(
 	ctx: &FrontendContext,
+	child_ptr: SymPtr,
 	ast: &ast::ClassDef,
 	parent_ident: SyntaxToken,
-	mut hierarchy: Vec<SymPtr>,
+	hierarchy: Vec<SymPtr>,
 ) -> Scope {
 	let parent_ns_name = NsName::Type(ctx.names.intern(&parent_ident));
 
@@ -76,8 +83,6 @@ fn resolve_ancestry(
 		return Scope::default();
 	}
 
-	hierarchy.push(parent_ptr.clone());
-
 	if parent_ptr.lang() != LangId::ZScript {
 		debug_assert_eq!(parent_ptr.lang(), LangId::Decorate);
 		// Only ZScript and DECORATE symbols can use `NsName::Type`,
@@ -95,9 +100,19 @@ fn resolve_ancestry(
 		return Scope::default();
 	}
 
-	match parent_ptr.as_ref().unwrap() {
-		Symbol::User(_) => validate_user_parent(ctx, parent_ptr, ast, parent_ident, hierarchy),
+	let result = match parent_ptr.as_ref().unwrap() {
+		Symbol::User(_) => {
+			validate_user_parent(ctx, parent_ptr.clone(), ast, parent_ident, hierarchy)
+		}
 		Symbol::Internal(in_sym) => validate_internal_parent(ctx, in_sym, ast, parent_ident),
+	};
+
+	if result.is_ok() {
+		ctx.make_child_of(parent_ptr, child_ptr);
+	}
+
+	match result {
+		Ok(scope) | Err(scope) => scope,
 	}
 }
 
@@ -106,13 +121,13 @@ fn validate_internal_parent(
 	parent_sym: &InternalSymbol,
 	ast: &ast::ClassDef,
 	parent_ident: SyntaxToken,
-) -> Scope {
+) -> Result<Scope, Scope> {
 	let Definition::ZScript(def) = &parent_sym.def else {
 		unreachable!()
 	};
 
 	if matches!(def, Datum::Class { .. }) {
-		return parent_sym.scope.clone();
+		return Ok(parent_sym.scope.as_ref().unwrap().clone());
 	}
 
 	let diag_builder = ctx.src.diag_builder(
@@ -134,21 +149,21 @@ fn validate_internal_parent(
 	);
 
 	let message = match def {
-		Datum::_Enum => {
+		Datum::Enum(_) => {
 			format!("`{}` is an enum", parent_ident.text())
 		}
 		Datum::_MixinClass => {
 			format!("`{}` is a mixin class", parent_ident.text())
 		}
-		Datum::_Primitive => {
+		Datum::Primitive(_) => {
 			format!("`{}` is a primitive type", parent_ident.text())
 		}
-		Datum::_Struct => {
+		Datum::Struct(_) => {
 			format!("`{}` is a struct", parent_ident.text())
 		}
-		Datum::Class => unreachable!(), // Already handled.
+		Datum::Class(_) => unreachable!(), // Already handled.
 		// None of these can be retrieved using `NsName::Type`.
-		Datum::Constant | Datum::_Field(_) | Datum::Function(_) => unreachable!(),
+		Datum::Constant | Datum::Field(_) | Datum::Function(_) => unreachable!(),
 	};
 
 	ctx.raise(diag_builder.with_related(DiagnosticRelatedInformation {
@@ -156,7 +171,7 @@ fn validate_internal_parent(
 		message,
 	}));
 
-	Scope::default()
+	Err(Scope::default())
 }
 
 fn validate_user_parent(
@@ -164,8 +179,8 @@ fn validate_user_parent(
 	parent_sym: SymPtr,
 	ast: &ast::ClassDef,
 	parent_ident: SyntaxToken,
-	hierarchy: Vec<SymPtr>,
-) -> Scope {
+	mut hierarchy: Vec<SymPtr>,
+) -> Result<Scope, Scope> {
 	let parent_u = parent_sym.as_user().unwrap();
 	let parent_syn = Syn::kind_from_raw(parent_u.syn);
 
@@ -195,8 +210,10 @@ fn validate_user_parent(
 			message,
 		}));
 
-		return Scope::default();
+		return Err(Scope::default());
 	}
+
+	hierarchy.push(parent_sym.clone());
 
 	let ret = if let Some(p) = parent_u.scope.as_ref() {
 		p.clone()
@@ -221,7 +238,7 @@ fn validate_user_parent(
 		p
 	};
 
-	ret
+	Ok(ret)
 }
 
 pub(crate) fn declare_class_innards(
@@ -401,7 +418,7 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 				decl::redeclare_error(
 					ctx,
 					d,
-					super::symbol_crit_span(&node),
+					super::help::symbol_crit_span(&node),
 					ctx.names.resolve(ns_name),
 				);
 			}
@@ -516,7 +533,7 @@ pub(crate) fn extend_struct(ctx: &FrontendContext, ast: ast::StructExtend) {
 				decl::redeclare_error(
 					ctx,
 					d,
-					super::symbol_crit_span(&node),
+					super::help::symbol_crit_span(&node),
 					ctx.names.resolve(ns_name),
 				);
 			}
@@ -550,7 +567,6 @@ fn expand_mixin(ctx: &FrontendContext, class_ptr: SymPtr, scope: &mut Scope, ast
 	};
 
 	let mixin_u = mixin_ptr.as_user().unwrap();
-	ctx.make_ref_to(mixin_ident.text_range(), mixin_ptr.clone());
 
 	if let Err(()) = ctx.make_mixin(class_ptr.clone(), mixin_ptr.clone()) {
 		ctx.raise(ctx.src.diag_builder(

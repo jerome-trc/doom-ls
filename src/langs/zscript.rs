@@ -7,6 +7,7 @@ pub(crate) mod define;
 pub(crate) mod docsym;
 pub(crate) mod expand;
 pub(crate) mod goto_def;
+pub(crate) mod help;
 pub(crate) mod hover;
 pub(crate) mod inctree;
 pub(crate) mod internal;
@@ -15,26 +16,22 @@ pub(crate) mod sema;
 pub(crate) mod semtok;
 
 use doomfront::{
-	rowan::{ast::AstNode, TextRange},
+	rowan::ast::AstNode,
 	zdoom::{
 		self,
-		zscript::{ast, Syn, SyntaxNode},
+		zscript::{ast, SyntaxNode},
 	},
 };
-use lsp_types::SymbolKind;
 use petgraph::prelude::DiGraphMap;
 use rayon::prelude::*;
 use tracing::debug;
 
 use crate::{
 	arena::Arena,
-	core::{Core, Project, Source, WorkingWorld},
-	data::{SymGraphKey, SymGraphVal, SymPtr, UserSymbol},
+	core::{Project, Source, WorkingWorld},
 	frontend::FrontendContext,
 	intern::{NsName, PathIx},
 };
-
-use self::sema::{Datum, FunctionFlags};
 
 #[derive(Debug, Clone)]
 pub(crate) struct IncludeTree {
@@ -233,11 +230,23 @@ pub(crate) fn front2(world: &WorkingWorld, project_ix: usize, project: &Project)
 						define::class::extend(&ctx, sym_ptr, classext);
 					}
 				}
-				ast::TopLevel::ConstDef(_)
-				| ast::TopLevel::StructDef(_)
-				| ast::TopLevel::EnumDef(_)
-				| ast::TopLevel::MixinClassDef(_)
-				| ast::TopLevel::StructExtend(_) => {} // TODO
+				ast::TopLevel::EnumDef(enumdef) => {
+					let sym_ptr = ctx.get_symbol(src, enumdef.syntax().text_range()).unwrap();
+					define::enumeration::define(&ctx, sym_ptr, enumdef);
+				}
+				ast::TopLevel::StructDef(structdef) => {
+					let sym_ptr = ctx
+						.get_symbol(src, structdef.syntax().text_range())
+						.unwrap();
+					define::structure::define(&ctx, sym_ptr, structdef);
+				}
+				ast::TopLevel::ConstDef(_) => {}
+				ast::TopLevel::MixinClassDef(mixindef) => {
+					let sym_ptr = ctx.get_symbol(src, mixindef.syntax().text_range()).unwrap();
+					let ident = mixindef.name().unwrap();
+					ctx.make_ref_to(ident.text_range(), sym_ptr);
+				}
+				ast::TopLevel::StructExtend(structext) => {} // TODO
 				ast::TopLevel::Include(_) | ast::TopLevel::Version(_) => continue,
 			}
 		}
@@ -256,176 +265,4 @@ pub(crate) fn front2(world: &WorkingWorld, project_ix: usize, project: &Project)
 		"Finished ZScript function check pass for project: {}",
 		project.root.display()
 	);
-}
-
-/// Used for [`Core::decl_text`].
-#[must_use]
-pub(crate) fn decl_text(ctx: &Core, sym_ptr: &SymPtr, u_sym: &UserSymbol, datum: &Datum) -> String {
-	use std::fmt::Write;
-
-	let mut ret = String::new();
-
-	// TODO
-	match datum {
-		Datum::Class => {
-			let _ = write!(ret, "class {}", ctx.names.resolve(u_sym.name));
-		}
-		Datum::Constant => {
-			let _ = write!(ret, "const {}", ctx.names.resolve(u_sym.name));
-		}
-		Datum::_Enum => {
-			let _ = write!(ret, "enum {}", ctx.names.resolve(u_sym.name));
-		}
-		Datum::_Field(_) => {
-			let _ = write!(ret, "{}", ctx.names.resolve(u_sym.name));
-		}
-		Datum::Function(fn_d) => {
-			if let Some(sgv) = ctx
-				.ready
-				.sym_graph
-				.get(&SymGraphKey::Holder(sym_ptr.clone()))
-			{
-				let SymGraphVal::Symbol(holder) = sgv else {
-					unreachable!()
-				};
-
-				let holder_name = ctx.names.resolve(holder.as_user().unwrap().name);
-				let _ = write!(ret, "{holder_name}.");
-			}
-
-			let _ = write!(ret, "{}()", ctx.names.resolve(u_sym.name));
-
-			if fn_d.flags.contains(FunctionFlags::CONST) {
-				let _ = write!(ret, " const");
-			}
-		}
-		Datum::_MixinClass => {
-			let _ = write!(ret, "mixin class {}", ctx.names.resolve(u_sym.name));
-		}
-		Datum::_Primitive => {
-			let _ = write!(ret, "{}", ctx.names.resolve(u_sym.name));
-		}
-		Datum::_Struct => {
-			let _ = write!(ret, "struct {}", ctx.names.resolve(u_sym.name));
-		}
-	}
-
-	ret
-}
-
-#[must_use]
-pub(crate) fn lsp_kind(_: &UserSymbol, datum: &Datum) -> SymbolKind {
-	match datum {
-		Datum::Class => SymbolKind::CLASS,
-		Datum::Constant => SymbolKind::CONSTANT, // TODO: check if enum variant.
-		Datum::_Enum => SymbolKind::ENUM,
-		Datum::_Field(_) => SymbolKind::FIELD,
-		Datum::Function(fn_d) => {
-			if fn_d.flags.contains(FunctionFlags::STATIC) {
-				SymbolKind::FUNCTION
-			} else {
-				SymbolKind::METHOD
-			}
-		}
-		Datum::_MixinClass => SymbolKind::INTERFACE,
-		Datum::_Primitive => SymbolKind::OPERATOR, // Strictly speaking, this is unreachable.
-		Datum::_Struct => SymbolKind::STRUCT,
-	}
-}
-
-/// Used for [`FrontendContext::diag_location`].
-#[must_use]
-fn symbol_crit_span(node: &SyntaxNode) -> TextRange {
-	match node.kind() {
-		Syn::ClassDef => {
-			let classdef = ast::ClassDef::cast(node.clone()).unwrap();
-			let start = classdef.keyword().text_range().start();
-
-			let end = if let Some(qual) = classdef.qualifiers().last() {
-				qual.text_range().end()
-			} else if let Some(parent) = classdef.parent_class() {
-				parent.text_range().end()
-			} else {
-				classdef.name().unwrap().text_range().end()
-			};
-
-			TextRange::new(start, end)
-		}
-		Syn::FunctionDecl => {
-			let fndecl = ast::FunctionDecl::cast(node.clone()).unwrap();
-
-			let start = if let Some(qual) = fndecl.qualifiers().iter().next() {
-				qual.text_range().start()
-			} else {
-				fndecl.return_types().syntax().text_range().start()
-			};
-
-			let end = if let Some(kw) = fndecl.const_keyword() {
-				kw.text_range().end()
-			} else {
-				fndecl.param_list().unwrap().syntax().text_range().end()
-			};
-
-			TextRange::new(start, end)
-		}
-		Syn::VarName => {
-			let parent = node.parent().unwrap();
-			debug_assert_eq!(parent.kind(), Syn::FieldDecl);
-			parent.text_range()
-		}
-		Syn::StateLabel | Syn::FlagDef | Syn::PropertyDef | Syn::EnumVariant => node.text_range(),
-		Syn::StructDef => {
-			let structdef = ast::StructDef::cast(node.clone()).unwrap();
-
-			let start = structdef.keyword().text_range().start();
-
-			let end = if let Some(qual) = structdef.qualifiers().last() {
-				qual.text_range().end()
-			} else {
-				structdef.name().unwrap().text_range().end()
-			};
-
-			TextRange::new(start, end)
-		}
-		Syn::StaticConstStat => {
-			let sconst = ast::StaticConstStat::cast(node.clone()).unwrap();
-
-			TextRange::new(
-				sconst.keywords().0.text_range().start(),
-				sconst.name().unwrap().text_range().end(),
-			)
-		}
-		Syn::MixinClassDef => {
-			let mixindef = ast::MixinClassDef::cast(node.clone()).unwrap();
-			let ident = mixindef.name().unwrap();
-
-			TextRange::new(
-				mixindef.keywords().0.text_range().start(),
-				ident.text_range().start(),
-			)
-		}
-		Syn::ConstDef => {
-			let constdef = ast::ConstDef::cast(node.clone()).unwrap();
-
-			TextRange::new(
-				constdef.keyword().text_range().start(),
-				constdef.syntax().text_range().end(),
-			)
-		}
-		Syn::EnumDef => {
-			let enumdef = ast::EnumDef::cast(node.clone()).unwrap();
-			let ident = enumdef.name().unwrap();
-
-			let start = enumdef.keyword().text_range().start();
-
-			let end = if let Some(tspec) = enumdef.type_spec() {
-				tspec.0.text_range().end()
-			} else {
-				ident.text_range().end()
-			};
-
-			TextRange::new(start, end)
-		}
-		other => unreachable!("called `symbol_crit_span` on non-symbol node: {other:#?}"),
-	}
 }

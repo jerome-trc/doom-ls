@@ -1,13 +1,10 @@
 //! Functions related to manipulating include trees.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use doomfront::{
 	rowan::{ast::AstNode, GreenNode},
-	zdoom::{
-		ast::LitToken,
-		zscript::{ast, Syn, SyntaxNode},
-	},
+	zdoom::zscript::{ast, Syn, SyntaxNode},
 };
 use lsp_types::{Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, Url};
 use petgraph::prelude::DiGraphMap;
@@ -58,33 +55,30 @@ pub(crate) fn walk(core: &mut Core) {
 			.for_each(|green| {
 				let cursor = SyntaxNode::new_root(green);
 				let directive = ast::IncludeDirective::cast(cursor).unwrap();
-				let lit = directive.argument().unwrap();
 
-				let Some(string) = lit.string() else {
-					walker.raise(
-						walker
-							.src
-							.diag_builder(
-								lit.syntax().text_range(),
-								DiagnosticSeverity::ERROR,
-								"expected a string argument".to_string(),
-							)
-							.0,
-					);
-
-					return;
+				let Some(uncanon) = directive.include_path(&walker.project.root, || {
+					walker.paths.resolve(walker.src.id).parent().unwrap()
+				}) else {
+					return; // Parser error.
 				};
 
-				let full_path = match compose_include_path(
-					walker.paths,
-					&walker.project.root,
-					walker.src,
-					&lit,
-					string,
-				) {
+				let full_path = match uncanon.canonicalize() {
 					Ok(p) => p,
-					Err(diag) => {
-						walker.raise(diag);
+					Err(_) => {
+						walker.raise(
+							walker
+								.src
+								.diag_builder(
+									directive.syntax().text_range(),
+									DiagnosticSeverity::ERROR,
+									format!(
+										"malformed include path or non-existent file: {}",
+										uncanon.display(),
+									),
+								)
+								.0,
+						);
+
 						return;
 					}
 				};
@@ -96,7 +90,7 @@ pub(crate) fn walk(core: &mut Core) {
 						walker
 							.src
 							.diag_builder(
-								lit.syntax().text_range(),
+								directive.syntax().text_range(),
 								DiagnosticSeverity::ERROR,
 								format!("included file does not exist: {}", full_path.display()),
 							)
@@ -233,36 +227,27 @@ pub(crate) fn get_includes(
 			continue;
 		};
 
-		let Ok(lit) = directive.argument() else {
-			diags.push(
-				src.diag_builder(
-					directive.syntax().text_range(),
-					DiagnosticSeverity::ERROR,
-					"expected a string argument".to_string(),
-				)
-				.0,
-			);
-
-			continue;
+		let Some(uncanon) =
+			directive.include_path(&project_root, || paths.resolve(src.id).parent().unwrap())
+		else {
+			return; // Parser error.
 		};
 
-		let Some(string) = lit.string() else {
-			diags.push(
-				src.diag_builder(
-					lit.syntax().text_range(),
-					DiagnosticSeverity::ERROR,
-					"expected a string argument".to_string(),
-				)
-				.0,
-			);
-
-			return;
-		};
-
-		let full_path = match compose_include_path(paths, project_root, src, &lit, string) {
+		let full_path = match uncanon.canonicalize() {
 			Ok(p) => p,
-			Err(diag) => {
-				diags.push(diag);
+			Err(_) => {
+				diags.push(
+					src.diag_builder(
+						directive.syntax().text_range(),
+						DiagnosticSeverity::ERROR,
+						format!(
+							"malformed include path or non-existent file: {}",
+							uncanon.display(),
+						),
+					)
+					.0,
+				);
+
 				return;
 			}
 		};
@@ -272,7 +257,7 @@ pub(crate) fn get_includes(
 		if !files.contains_key(&included_id) {
 			diags.push(
 				src.diag_builder(
-					lit.syntax().text_range(),
+					directive.syntax().text_range(),
 					DiagnosticSeverity::ERROR,
 					format!("included file does not exist: {}", full_path.display()),
 				)
@@ -296,7 +281,7 @@ pub(crate) fn get_includes(
 
 			let diag_builder = src
 				.diag_builder(
-					lit.syntax().text_range(),
+					directive.syntax().text_range(),
 					DiagnosticSeverity::WARNING,
 					format!("file has already been included: {}", full_path.display()),
 				)
@@ -311,46 +296,4 @@ pub(crate) fn get_includes(
 		let directive_span = src.make_range(directive.syntax().text_range());
 		graph.add_edge(src.id, included_id, directive_span);
 	}
-}
-
-pub(crate) fn compose_include_path(
-	paths: &PathInterner,
-	project_root: &Path,
-	src: &Source,
-	lit: &LitToken<Syn>,
-	lit_str: &str,
-) -> Result<PathBuf, Diagnostic> {
-	let inc_path = Path::new(lit_str);
-
-	let mut inc_path_components = inc_path.components();
-
-	let inc_path_absolute = matches!(
-		inc_path_components.next(),
-		Some(std::path::Component::RootDir)
-	);
-
-	let full_path = if inc_path_absolute {
-		project_root.join(inc_path_components.collect::<PathBuf>())
-	} else {
-		let parent = paths.resolve(src.id).parent().unwrap();
-		let joined = parent.join(inc_path);
-
-		match joined.canonicalize() {
-			Ok(p) => p,
-			Err(_) => {
-				return Err(src
-					.diag_builder(
-						lit.syntax().text_range(),
-						DiagnosticSeverity::ERROR,
-						format!(
-							"malformed include path or non-existent file: {}",
-							joined.display(),
-						),
-					)
-					.0);
-			}
-		}
-	};
-
-	Ok(full_path)
 }
