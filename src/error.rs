@@ -4,7 +4,7 @@ use lsp_server::{ErrorCode, Message, ProtocolError, RequestId, Response, Respons
 use crate::ErrorBox;
 
 #[derive(Debug)]
-pub(crate) enum Error {
+pub enum Error {
 	Response(Response),
 	/// Failures to send messages over the LSP connection are given a separate
 	/// variant to tell top-level code not to use the channel to report the error.
