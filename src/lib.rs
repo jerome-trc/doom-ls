@@ -9,6 +9,7 @@ use dashmap::{DashMap, DashSet};
 use rustc_hash::FxHasher;
 
 pub mod error;
+pub mod front;
 
 pub type ErrorBox = Box<dyn std::error::Error + Send + Sync>;
 pub type FxDashMap<K, V> = DashMap<K, V, BuildHasherDefault<FxHasher>>;
