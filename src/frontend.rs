@@ -275,10 +275,7 @@ impl<'w> FrontendContext<'w> {
 	}
 
 	pub(crate) fn raise(&self, builder: DiagBuilder) {
-		self.diags
-			.entry(self.src.id)
-			.or_insert(vec![])
-			.push(builder.0)
+		self.diags.entry(self.src.id).or_default().push(builder.0)
 	}
 }
 

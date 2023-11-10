@@ -19,15 +19,7 @@ pub struct FileSpan {
 
 impl PartialOrd for FileSpan {
 	fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-		match self.file_id.partial_cmp(&other.file_id) {
-			Some(core::cmp::Ordering::Equal) => {}
-			ord => return ord,
-		}
-
-		PartialOrd::partial_cmp(
-			&(u32::from(self.span.start()), u32::from(self.span.end())),
-			&(u32::from(other.span.start()), u32::from(other.span.end())),
-		)
+		Some(self.cmp(other))
 	}
 }
 

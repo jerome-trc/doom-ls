@@ -1,15 +1,8 @@
 use doomfront::{
 	rowan::ast::AstNode,
-	zdoom::{
-		self,
-		zscript::{
-			ast::{self, MemberQualSet},
-			Syn,
-		},
-	},
+	zdoom::zscript::ast::{self, MemberQualSet},
 };
 use lsp_types::{DiagnosticRelatedInformation, DiagnosticSeverity};
-use rustc_hash::FxHashMap;
 
 use crate::{
 	arena::Arena,
@@ -17,8 +10,6 @@ use crate::{
 	frontend::FrontendContext,
 	langs::zscript::sema::{self, FunctionFlags},
 };
-
-use super::Holder;
 
 pub(crate) fn define(
 	ctx: &FrontendContext,
@@ -52,17 +43,17 @@ pub(crate) fn define(
 			ast::MemberQual::Virtual(_) => todo!(),
 			ast::MemberQual::VirtualScope(_) => todo!(),
 			// Scope qualifiers get processed later.
-			ast::MemberQual::Play(_) | ast::MemberQual::Ui(_) => return,
+			ast::MemberQual::Play(_) | ast::MemberQual::Ui(_) => {}
 			// Visibility qualifiers get processed later.
-			ast::MemberQual::Private(_) | ast::MemberQual::Protected(_) => return,
+			ast::MemberQual::Private(_) | ast::MemberQual::Protected(_) => {}
 			// Useless to user code. Diagnostics get raised about these later.
 			ast::MemberQual::Internal(_)
 			| ast::MemberQual::Native(_)
-			| ast::MemberQual::VarArg(_) => return,
+			| ast::MemberQual::VarArg(_) => {}
 			// Inapplicable to functions. Diagnostics get raised about these later.
 			ast::MemberQual::Meta(_)
 			| ast::MemberQual::ReadOnly(_)
-			| ast::MemberQual::Transient(_) => return,
+			| ast::MemberQual::Transient(_) => {}
 		}
 	});
 

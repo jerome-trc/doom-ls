@@ -11,7 +11,6 @@ use crate::{
 	core::Core,
 	data::{SymGraphKey, SymGraphVal, SymPtr, Symbol, UserSymbol},
 	langs::zscript::sema::{self, ClassFlags, Datum, FieldFlags, StructFlags},
-	util,
 };
 
 use super::sema::FunctionFlags;

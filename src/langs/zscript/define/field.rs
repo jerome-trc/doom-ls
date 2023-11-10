@@ -164,11 +164,11 @@ impl Base {
 						));
 					}
 					// Scope qualifiers get processed later.
-					ast::MemberQual::Play(_) | ast::MemberQual::Ui(_) => return,
+					ast::MemberQual::Play(_) | ast::MemberQual::Ui(_) => {}
 					// Visibility qualifiers get processed later.
-					ast::MemberQual::Private(_) | ast::MemberQual::Protected(_) => return,
+					ast::MemberQual::Private(_) | ast::MemberQual::Protected(_) => {}
 					// Useless to user code. Diagnostics get raised about these later.
-					ast::MemberQual::Internal(_) | ast::MemberQual::Native(_) => return,
+					ast::MemberQual::Internal(_) | ast::MemberQual::Native(_) => {}
 					// Inapplicable to fields. Diagnostics get raised about these later.
 					ast::MemberQual::Abstract(_)
 					| ast::MemberQual::Final(_)
@@ -176,7 +176,7 @@ impl Base {
 					| ast::MemberQual::Static(_)
 					| ast::MemberQual::VarArg(_)
 					| ast::MemberQual::Virtual(_)
-					| ast::MemberQual::VirtualScope(_) => return,
+					| ast::MemberQual::VirtualScope(_) => {}
 				}
 			});
 

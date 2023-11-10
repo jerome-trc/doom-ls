@@ -37,7 +37,7 @@ pub(crate) fn walk(core: &mut Core) {
 
 	impl Walker<'_> {
 		fn raise(&self, diag: Diagnostic) {
-			let mut diags = self.diags.entry(self.src.id).or_insert(vec![]);
+			let mut diags = self.diags.entry(self.src.id).or_default();
 			diags.push(diag);
 		}
 	}
@@ -130,7 +130,7 @@ pub(crate) fn walk(core: &mut Core) {
 						walker
 							.diags
 							.entry(included_id)
-							.or_insert(vec![])
+							.or_default()
 							.append(&mut diags);
 					}
 
@@ -157,7 +157,7 @@ pub(crate) fn walk(core: &mut Core) {
 				core.pending
 					.malformed
 					.entry(root_id)
-					.or_insert(vec![])
+					.or_default()
 					.push(diag);
 			}
 		}
@@ -167,7 +167,7 @@ pub(crate) fn walk(core: &mut Core) {
 			src.green = Some(green);
 
 			if !diags.is_empty() {
-				let diags_entry = core.pending.malformed.entry(root_id).or_insert(vec![]);
+				let diags_entry = core.pending.malformed.entry(root_id).or_default();
 				diags_entry.append(&mut diags);
 			}
 		}
@@ -206,7 +206,7 @@ pub(crate) fn walk(core: &mut Core) {
 
 		for (file_id, mut d) in diags {
 			debug_assert!(!d.is_empty());
-			let diags_entry = core.pending.malformed.entry(file_id).or_insert(vec![]);
+			let diags_entry = core.pending.malformed.entry(file_id).or_default();
 			diags_entry.append(&mut d);
 		}
 	}
@@ -228,7 +228,7 @@ pub(crate) fn get_includes(
 		};
 
 		let Some(uncanon) =
-			directive.include_path(&project_root, || paths.resolve(src.id).parent().unwrap())
+			directive.include_path(project_root, || paths.resolve(src.id).parent().unwrap())
 		else {
 			return; // Parser error.
 		};
