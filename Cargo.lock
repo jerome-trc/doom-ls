@@ -38,12 +38,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arc-swap"
-version = "1.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bddcadddf5e9015d310179a59bb28c4d4b9920ad0f11e8e14dbadf654890c9a6"
-
-[[package]]
 name = "arrayvec"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -960,7 +954,6 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0eee8098afad3fb0c54a9007aab6804558410503ad676d4633f9c2559a00ac0f"
 dependencies = [
- "arc-swap",
  "serde",
  "stable_deref_trait",
 ]
@@ -1026,7 +1019,6 @@ dependencies = [
  "fixed",
  "glam",
  "home",
- "once_cell",
  "regex",
  "smartstring",
  "triomphe",
