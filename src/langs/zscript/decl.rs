@@ -14,7 +14,7 @@ use crate::{
 use super::expand;
 
 pub(crate) fn declare_class(ctx: &FrontendContext, ast: ast::ClassDef) {
-	let ident = ast.name().unwrap().into();
+	let ident = ast.head().name().unwrap().into();
 	let ns_name = NsName::Type(ctx.names.intern(&ident));
 
 	let mut globals = ctx.global_scope_mut(ctx.project_ix);

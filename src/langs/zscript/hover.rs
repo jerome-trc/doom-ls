@@ -4,7 +4,7 @@ mod keyword;
 
 use doomfront::{
 	rowan::ast::AstNode,
-	zdoom::zscript::{ast, Syn, SyntaxToken},
+	zdoom::zscript::{ast, Syntax, SyntaxToken},
 };
 use lsp_server::{Message, Response};
 use lsp_types::{Hover, HoverContents, HoverParams, LanguageString, MarkedString};
@@ -31,7 +31,7 @@ pub(crate) fn handle(ctx: request::Context, params: HoverParams) -> UnitResult {
 
 	let contents = if token.kind().is_keyword() {
 		keyword::hover_info_for(token)
-	} else if token.kind() == Syn::Ident {
+	} else if token.kind() == Syntax::Ident {
 		ident(&ctx, token)
 	} else {
 		// TODO:

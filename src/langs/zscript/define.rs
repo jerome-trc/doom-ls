@@ -11,7 +11,7 @@ pub(crate) mod field;
 pub(crate) mod function;
 pub(crate) mod structure;
 
-use doomfront::zdoom::zscript::{ast, Syn};
+use doomfront::zdoom::zscript::{ast, Syntax};
 use lsp_types::DiagnosticSeverity;
 use rustc_hash::FxHashMap;
 
@@ -29,7 +29,7 @@ pub(crate) struct Holder {
 fn member_qual_set(
 	ctx: &FrontendContext,
 	quals: &ast::MemberQuals,
-) -> FxHashMap<Syn, ast::MemberQual> {
+) -> FxHashMap<Syntax, ast::MemberQual> {
 	let mut qualset = FxHashMap::default();
 
 	for qual in quals.iter() {

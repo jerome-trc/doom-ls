@@ -1,6 +1,6 @@
 use doomfront::{
 	rowan::{ast::AstNode, cursor::SyntaxToken, Language, TextRange},
-	zdoom::zscript::{ast, Syn},
+	zdoom::zscript::{ast, Syntax},
 };
 use lsp_types::{DiagnosticRelatedInformation, DiagnosticSeverity};
 
@@ -22,7 +22,7 @@ pub(crate) fn class_inheritance(
 	ast: ast::ClassDef,
 	hierarchy: Vec<SymPtr>,
 ) -> Scope {
-	let mut base_scope = if let Some(parent_ident) = ast.parent_class() {
+	let mut base_scope = if let Some(parent_ident) = ast.head().parent_class() {
 		resolve_ancestry(ctx, sym_ptr.clone(), &ast, parent_ident.into(), hierarchy)
 	} else {
 		let parent_ptr = ctx.internal.cache_zscript.class_object.clone();
@@ -59,7 +59,7 @@ fn resolve_ancestry(
 				DiagnosticSeverity::ERROR,
 				format!(
 					"class `{}` has unknown base class `{}`",
-					ast.name().unwrap().text(),
+					ast.head().name().unwrap().text(),
 					parent_ident.text(),
 				),
 			));
@@ -76,7 +76,7 @@ fn resolve_ancestry(
 			DiagnosticSeverity::ERROR,
 			format!(
 				"class `{}` has circular inheritance",
-				ast.name().unwrap().text(),
+				ast.head().name().unwrap().text(),
 			),
 		)); // TODO: how much richer can this error messaging be?
 
@@ -92,7 +92,7 @@ fn resolve_ancestry(
 			DiagnosticSeverity::ERROR,
 			format!(
 				"ZScript class `{}` cannot inherit from DECORATE class `{}`",
-				ast.name().unwrap().text(),
+				ast.head().name().unwrap().text(),
 				parent_ident.text(),
 			),
 		));
@@ -135,7 +135,7 @@ fn validate_internal_parent(
 		DiagnosticSeverity::ERROR,
 		format!(
 			"class `{}` has unknown parent class `{}`",
-			ast.name().unwrap().text(),
+			ast.head().name().unwrap().text(),
 			parent_ident.text()
 		),
 	);
@@ -182,15 +182,15 @@ fn validate_user_parent(
 	mut hierarchy: Vec<SymPtr>,
 ) -> Result<Scope, Scope> {
 	let parent_u = parent_sym.as_user().unwrap();
-	let parent_syn = Syn::kind_from_raw(parent_u.syn);
+	let parent_syn = Syntax::kind_from_raw(parent_u.syn);
 
-	if parent_syn != Syn::ClassDef {
+	if parent_syn != Syntax::ClassDef {
 		let diag_builder = ctx.src.diag_builder(
 			parent_ident.text_range(),
 			DiagnosticSeverity::ERROR,
 			format!(
 				"class `{}` has unknown parent class `{}`",
-				ast.name().unwrap().text(),
+				ast.head().name().unwrap().text(),
 				parent_ident.text()
 			),
 		);
@@ -198,9 +198,9 @@ fn validate_user_parent(
 		let related_loc = ctx.make_location(ctx.file_with(parent_u), parent_u.id.span);
 
 		let message = match parent_syn {
-			Syn::EnumDef => format!("`{}` is an enum", parent_ident.text()),
-			Syn::StructDef => format!("`{}` is a struct", parent_ident.text()),
-			Syn::MixinClassDef => format!("`{}` is a mixin class", parent_ident.text()),
+			Syntax::EnumDef => format!("`{}` is an enum", parent_ident.text()),
+			Syntax::StructDef => format!("`{}` is a struct", parent_ident.text()),
+			Syntax::MixinClassDef => format!("`{}` is a mixin class", parent_ident.text()),
 			// Nothing else can be retrieved using `NsName::Type`.
 			_ => unreachable!(),
 		};
@@ -222,7 +222,7 @@ fn validate_user_parent(
 		// inheritance fully resolved.
 		debug_assert_eq!((parent_u.project as usize), ctx.project_ix);
 		let src = ctx.file_with(parent_u);
-		let node = src.node_covering::<Syn>(parent_u.id.span);
+		let node = src.node_covering::<Syntax>(parent_u.id.span);
 		let new_ctx = FrontendContext { src, ..*ctx };
 
 		let p = class_inheritance(
@@ -359,9 +359,9 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 		return;
 	}
 
-	match Syn::kind_from_raw(u_sym.syn) {
-		Syn::ClassDef => {}
-		Syn::EnumDef => {
+	match Syntax::kind_from_raw(u_sym.syn) {
+		Syntax::ClassDef => {}
+		Syntax::EnumDef => {
 			ctx.raise(ctx.src.diag_builder(
 				ident.text_range(),
 				DiagnosticSeverity::ERROR,
@@ -370,7 +370,7 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 
 			return;
 		}
-		Syn::StructDef => {
+		Syntax::StructDef => {
 			ctx.raise(ctx.src.diag_builder(
 				ident.text_range(),
 				DiagnosticSeverity::ERROR,
@@ -379,7 +379,7 @@ pub(crate) fn extend_class(ctx: &FrontendContext, ast: ast::ClassExtend) {
 
 			return;
 		}
-		Syn::MixinClassDef => {
+		Syntax::MixinClassDef => {
 			ctx.raise(ctx.src.diag_builder(
 				ident.text_range(),
 				DiagnosticSeverity::ERROR,
@@ -474,9 +474,9 @@ pub(crate) fn extend_struct(ctx: &FrontendContext, ast: ast::StructExtend) {
 		return;
 	}
 
-	match Syn::kind_from_raw(u_sym.syn) {
-		Syn::StructDef => {}
-		Syn::ClassDef => {
+	match Syntax::kind_from_raw(u_sym.syn) {
+		Syntax::StructDef => {}
+		Syntax::ClassDef => {
 			ctx.raise(ctx.src.diag_builder(
 				ident.text_range(),
 				DiagnosticSeverity::ERROR,
@@ -485,7 +485,7 @@ pub(crate) fn extend_struct(ctx: &FrontendContext, ast: ast::StructExtend) {
 
 			return;
 		}
-		Syn::EnumDef => {
+		Syntax::EnumDef => {
 			ctx.raise(ctx.src.diag_builder(
 				ident.text_range(),
 				DiagnosticSeverity::ERROR,
@@ -494,7 +494,7 @@ pub(crate) fn extend_struct(ctx: &FrontendContext, ast: ast::StructExtend) {
 
 			return;
 		}
-		Syn::MixinClassDef => {
+		Syntax::MixinClassDef => {
 			ctx.raise(ctx.src.diag_builder(
 				ident.text_range(),
 				DiagnosticSeverity::ERROR,
@@ -588,7 +588,7 @@ fn expand_mixin(ctx: &FrontendContext, class_ptr: SymPtr, scope: &mut Scope, ast
 		..*ctx
 	};
 
-	let node = new_ctx.src.node_covering::<Syn>(mixin_u.id.span);
+	let node = new_ctx.src.node_covering::<Syntax>(mixin_u.id.span);
 	let mixindef = ast::MixinClassDef::cast(node).unwrap();
 	declare_class_innards(&new_ctx, class_ptr, scope, mixindef.innards());
 }

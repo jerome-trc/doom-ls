@@ -2,7 +2,7 @@
 
 use doomfront::{
 	rowan::ast::AstNode,
-	zdoom::zscript::{ast, Syn, SyntaxNode},
+	zdoom::zscript::{ast, Syntax, SyntaxNode},
 };
 
 use lsp_server::{Connection, Message, RequestId, Response};
@@ -72,7 +72,7 @@ pub(crate) fn handle(conn: &Connection, src: &Source, req_id: RequestId) -> Unit
 
 #[must_use]
 fn doc_symbol_class(src: &Source, classdef: ast::ClassDef) -> Option<DocumentSymbol> {
-	let Ok(name) = classdef.name() else {
+	let Ok(name) = classdef.head().name() else {
 		return None;
 	};
 
@@ -82,7 +82,7 @@ fn doc_symbol_class(src: &Source, classdef: ast::ClassDef) -> Option<DocumentSym
 		detail: {
 			let mut ancestor = ": ".to_string();
 
-			if let Some(parent) = classdef.parent_class() {
+			if let Some(parent) = classdef.head().parent_class() {
 				ancestor.push_str(parent.text());
 			} else {
 				ancestor.push_str("Object");
@@ -267,7 +267,7 @@ fn doc_symbol_const(src: &Source, constdef: ast::ConstDef) -> Option<DocumentSym
 		detail: constdef
 			.initializer()
 			.ok()
-			.map(|init| util::descendant_tokens_to_string(init.syntax(), Syn::Whitespace)),
+			.map(|init| util::descendant_tokens_to_string(init.syntax(), Syntax::Whitespace)),
 		kind: SymbolKind::CONSTANT,
 		tags: None,
 		deprecated: None,
@@ -311,7 +311,7 @@ fn doc_symbol_enum(src: &Source, enumdef: ast::EnumDef) -> Option<DocumentSymbol
 					name: vname.text().to_string(),
 					detail: {
 						variant.initializer().map(|init| {
-							util::descendant_tokens_to_string(init.syntax(), Syn::Whitespace)
+							util::descendant_tokens_to_string(init.syntax(), Syntax::Whitespace)
 						})
 					},
 					kind: SymbolKind::ENUM_MEMBER,
@@ -345,7 +345,7 @@ fn doc_symbol_field(
 			name: varname.ident().text().to_string(),
 			detail: Some(util::descendant_tokens_to_string(
 				type_spec.syntax(),
-				Syn::Whitespace,
+				Syntax::Whitespace,
 			)),
 			kind: SymbolKind::FIELD,
 			tags: None,
@@ -385,7 +385,7 @@ fn doc_symbol_function(src: &Source, fndecl: ast::FunctionDecl) -> Option<Docume
 			let mut detail = String::new();
 
 			for ret_t in fndecl.return_types().iter() {
-				util::append_descendant_tokens(&mut detail, ret_t.syntax(), Syn::Whitespace);
+				util::append_descendant_tokens(&mut detail, ret_t.syntax(), Syntax::Whitespace);
 				detail.push_str(", ");
 			}
 
@@ -400,7 +400,7 @@ fn doc_symbol_function(src: &Source, fndecl: ast::FunctionDecl) -> Option<Docume
 				detail.push('(');
 
 				for param in param_list.iter() {
-					util::append_descendant_tokens(&mut detail, param.syntax(), Syn::Whitespace);
+					util::append_descendant_tokens(&mut detail, param.syntax(), Syntax::Whitespace);
 					detail.push_str(", ");
 				}
 

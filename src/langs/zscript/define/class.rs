@@ -14,9 +14,9 @@ pub(crate) fn define(ctx: &FrontendContext, class_ptr: SymPtr, ast: ast::ClassDe
 		min_version: None,
 	});
 
-	ctx.make_ref_to(ast.name().unwrap().text_range(), class_ptr.clone());
+	ctx.make_ref_to(ast.head().name().unwrap().text_range(), class_ptr.clone());
 
-	if let Some(parent_ident) = ast.parent_class() {
+	if let Some(parent_ident) = ast.head().parent_class() {
 		if let Some(parent_ref) = ctx.parent_of(class_ptr.clone()) {
 			let parent_ptr = parent_ref.as_symbol().unwrap().clone();
 			drop(parent_ref);

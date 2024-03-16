@@ -2,7 +2,7 @@
 
 use doomfront::{
 	rowan::{ast::AstNode, TextSize},
-	zdoom::zscript::{ast, Syn, SyntaxNode, SyntaxToken},
+	zdoom::zscript::{ast, Syntax, SyntaxNode, SyntaxToken},
 };
 use lsp_server::{ErrorCode, Message, Response};
 use lsp_types::{GotoDefinitionResponse, Location, Position, Url};
@@ -21,7 +21,7 @@ pub(crate) fn handle(ctx: request::Context, pos: TextSize) -> UnitResult {
 		.map_to_response(ctx.id, ErrorCode::InvalidParams));
 	};
 
-	if token.kind() != Syn::StringLit {
+	if token.kind() != Syntax::StringLit {
 		#[cfg(debug_assertions)]
 		debug!("Goto-def miss - unsupported token.");
 		// TODO:

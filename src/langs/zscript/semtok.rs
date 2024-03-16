@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use doomfront::{
 	rowan::{ast::AstNode, TextRange, TextSize, WalkEvent},
-	zdoom::zscript::{ast, Syn, SyntaxElem, SyntaxNode, SyntaxToken},
+	zdoom::zscript::{ast, Syntax, SyntaxElem, SyntaxNode, SyntaxToken},
 };
 use lsp_server::{ErrorCode, Message, Response};
 use lsp_types::{SemanticToken, SemanticTokens, SemanticTokensRangeResult, SemanticTokensResult};
@@ -112,7 +112,7 @@ fn walk(ctx: &request::Context, cursor: SyntaxNode) -> Vec<SemanticToken> {
 			continue;
 		};
 
-		if token.kind() != Syn::Ident {
+		if token.kind() != Syntax::Ident {
 			highlight_non_ident(ctx, &mut highlighter, token);
 		} else {
 			highlight_ident(ctx, &mut highlighter, token);
@@ -218,101 +218,101 @@ fn highlight_non_ident(ctx: &request::Context, hl: &mut Highlighter, token: Synt
 
 	if syn.is_keyword() {
 		match syn {
-			Syn::KwBreak
-			| Syn::KwCase
-			| Syn::KwContinue
-			| Syn::KwDo
-			| Syn::KwElse
-			| Syn::KwFail
-			| Syn::KwForEach
-			| Syn::KwFor
-			| Syn::KwGoto
-			| Syn::KwInclude
-			| Syn::KwIf
-			| Syn::KwLoop
-			| Syn::KwReturn
-			| Syn::KwStop
-			| Syn::KwSwitch
-			| Syn::KwUntil
-			| Syn::KwVersion
-			| Syn::KwWait
-			| Syn::KwWhile => hl.advance_mod(SemToken::Keyword, range, SemTokenFlags::CONTROL_FLOW),
-			Syn::KwAbstract
-			| Syn::KwAction
-			| Syn::KwArray
-			| Syn::KwBool
-			| Syn::KwBright
-			| Syn::KwByte
-			| Syn::KwCanRaise
-			| Syn::KwChar
-			| Syn::KwClass
-			| Syn::KwClearScope
-			| Syn::KwColor
-			| Syn::KwConst
-			| Syn::KwDefault
-			| Syn::KwDeprecated
-			| Syn::KwDouble
-			| Syn::KwEnum
-			| Syn::KwExtend
-			| Syn::KwFalse
-			| Syn::KwFast
-			| Syn::KwFinal
-			| Syn::KwFlagDef
-			| Syn::KwFloat
-			| Syn::KwInt
-			| Syn::KwInt16
-			| Syn::KwInt8
-			| Syn::KwInternal
-			| Syn::KwIn
-			| Syn::KwLatent
-			| Syn::KwLet
-			| Syn::KwLight
-			| Syn::KwLong
-			| Syn::KwMap
-			| Syn::KwMapIterator
-			| Syn::KwMeta
-			| Syn::KwMixin
-			| Syn::KwName
-			| Syn::KwNative
-			| Syn::KwNoDelay
-			| Syn::KwNone
-			| Syn::KwOffset
-			| Syn::KwOut
-			| Syn::KwOverride
-			| Syn::KwPlay
-			| Syn::KwPrivate
-			| Syn::KwProperty
-			| Syn::KwProtected
-			| Syn::KwReadOnly
-			| Syn::KwSByte
-			| Syn::KwShort
-			| Syn::KwSlow
-			| Syn::KwSound
-			| Syn::KwState
-			| Syn::KwStates
-			| Syn::KwStatic
-			| Syn::KwString
-			| Syn::KwStruct
-			| Syn::KwSuper
-			| Syn::KwReplaces
-			| Syn::KwTransient
-			| Syn::KwTrue
-			| Syn::KwUi
-			| Syn::KwUInt
-			| Syn::KwUInt16
-			| Syn::KwUInt8
-			| Syn::KwULong
-			| Syn::KwUShort
-			| Syn::KwVar
-			| Syn::KwVarArg
-			| Syn::KwVector2
-			| Syn::KwVector3
-			| Syn::KwVirtual
-			| Syn::KwVirtualScope
-			| Syn::KwVoid
-			| Syn::KwAuto
-			| Syn::KwVolatile => hl.advance(SemToken::Keyword, range),
-			Syn::KwAlignOf | Syn::KwCross | Syn::KwDot | Syn::KwIs | Syn::KwSizeOf => {
+			Syntax::KwBreak
+			| Syntax::KwCase
+			| Syntax::KwContinue
+			| Syntax::KwDo
+			| Syntax::KwElse
+			| Syntax::KwFail
+			| Syntax::KwForEach
+			| Syntax::KwFor
+			| Syntax::KwGoto
+			| Syntax::KwInclude
+			| Syntax::KwIf
+			| Syntax::KwLoop
+			| Syntax::KwReturn
+			| Syntax::KwStop
+			| Syntax::KwSwitch
+			| Syntax::KwUntil
+			| Syntax::KwVersion
+			| Syntax::KwWait
+			| Syntax::KwWhile => hl.advance_mod(SemToken::Keyword, range, SemTokenFlags::CONTROL_FLOW),
+			Syntax::KwAbstract
+			| Syntax::KwAction
+			| Syntax::KwArray
+			| Syntax::KwBool
+			| Syntax::KwBright
+			| Syntax::KwByte
+			| Syntax::KwCanRaise
+			| Syntax::KwChar
+			| Syntax::KwClass
+			| Syntax::KwClearScope
+			| Syntax::KwColor
+			| Syntax::KwConst
+			| Syntax::KwDefault
+			| Syntax::KwDeprecated
+			| Syntax::KwDouble
+			| Syntax::KwEnum
+			| Syntax::KwExtend
+			| Syntax::KwFalse
+			| Syntax::KwFast
+			| Syntax::KwFinal
+			| Syntax::KwFlagDef
+			| Syntax::KwFloat
+			| Syntax::KwInt
+			| Syntax::KwInt16
+			| Syntax::KwInt8
+			| Syntax::KwInternal
+			| Syntax::KwIn
+			| Syntax::KwLatent
+			| Syntax::KwLet
+			| Syntax::KwLight
+			| Syntax::KwLong
+			| Syntax::KwMap
+			| Syntax::KwMapIterator
+			| Syntax::KwMeta
+			| Syntax::KwMixin
+			| Syntax::KwName
+			| Syntax::KwNative
+			| Syntax::KwNoDelay
+			| Syntax::KwNone
+			| Syntax::KwOffset
+			| Syntax::KwOut
+			| Syntax::KwOverride
+			| Syntax::KwPlay
+			| Syntax::KwPrivate
+			| Syntax::KwProperty
+			| Syntax::KwProtected
+			| Syntax::KwReadOnly
+			| Syntax::KwSByte
+			| Syntax::KwShort
+			| Syntax::KwSlow
+			| Syntax::KwSound
+			| Syntax::KwState
+			| Syntax::KwStates
+			| Syntax::KwStatic
+			| Syntax::KwString
+			| Syntax::KwStruct
+			| Syntax::KwSuper
+			| Syntax::KwReplaces
+			| Syntax::KwTransient
+			| Syntax::KwTrue
+			| Syntax::KwUi
+			| Syntax::KwUInt
+			| Syntax::KwUInt16
+			| Syntax::KwUInt8
+			| Syntax::KwULong
+			| Syntax::KwUShort
+			| Syntax::KwVar
+			| Syntax::KwVarArg
+			| Syntax::KwVector2
+			| Syntax::KwVector3
+			| Syntax::KwVirtual
+			| Syntax::KwVirtualScope
+			| Syntax::KwVoid
+			| Syntax::KwAuto
+			| Syntax::KwVolatile => hl.advance(SemToken::Keyword, range),
+			Syntax::KwAlignOf | Syntax::KwCross | Syntax::KwDot | Syntax::KwIs | Syntax::KwSizeOf => {
 				hl.advance(SemToken::Operator, range)
 			}
 			_ => {}
@@ -324,28 +324,28 @@ fn highlight_non_ident(ctx: &request::Context, hl: &mut Highlighter, token: Synt
 	if syn.is_glyph() {
 		if let Some(parent) = token.parent() {
 			match parent.kind() {
-				Syn::BinExpr => {
+				Syntax::BinExpr => {
 					let e_bin = ast::BinExpr::cast(parent).unwrap();
 
 					if e_bin.operator().0 == token {
 						hl.advance(SemToken::Operator, range);
 					}
 				}
-				Syn::PrefixExpr => {
+				Syntax::PrefixExpr => {
 					let e_pre = ast::PrefixExpr::cast(parent).unwrap();
 
 					if e_pre.operator().0 == token {
 						hl.advance(SemToken::Operator, range);
 					}
 				}
-				Syn::PostfixExpr => {
+				Syntax::PostfixExpr => {
 					let e_post = ast::PostfixExpr::cast(parent).unwrap();
 
 					if e_post.operator().0 == token {
 						hl.advance(SemToken::Operator, range);
 					}
 				}
-				Syn::TernaryExpr => {
+				Syntax::TernaryExpr => {
 					let e_tern = ast::TernaryExpr::cast(parent).unwrap();
 
 					if e_tern.question_mark() == token
@@ -362,9 +362,9 @@ fn highlight_non_ident(ctx: &request::Context, hl: &mut Highlighter, token: Synt
 	}
 
 	match syn {
-		Syn::IntLit | Syn::FloatLit => hl.advance(SemToken::Number, range),
-		Syn::StringLit => highlight_string_literal(ctx, hl, token),
-		Syn::NameLit => {
+		Syntax::IntLit | Syntax::FloatLit => hl.advance(SemToken::Number, range),
+		Syntax::StringLit => highlight_string_literal(ctx, hl, token),
+		Syntax::NameLit => {
 			// TODO: context sensitivity.
 			hl.advance(
 				SemToken::String,
@@ -382,12 +382,12 @@ fn highlight_non_ident(ctx: &request::Context, hl: &mut Highlighter, token: Synt
 				TextRange::new(range.end() - TextSize::from(1), range.end()),
 			);
 		}
-		Syn::NullLit => hl.advance(SemToken::Keyword, range),
-		Syn::RegionStart | Syn::RegionEnd => {
+		Syntax::NullLit => hl.advance(SemToken::Keyword, range),
+		Syntax::RegionStart | Syntax::RegionEnd => {
 			hl.advance_mod(SemToken::Keyword, range, SemTokenFlags::CONTROL_FLOW)
 		}
 		// TODO: highlighting for zscdoc links.
-		Syn::Comment | Syn::DocComment => hl.advance(SemToken::Comment, range),
+		Syntax::Comment | Syntax::DocComment => hl.advance(SemToken::Comment, range),
 		// TODO: state sprites and frames...?
 		_ => {} // Whitespace, unknown, or previously handled.
 	}
@@ -396,11 +396,11 @@ fn highlight_non_ident(ctx: &request::Context, hl: &mut Highlighter, token: Synt
 fn highlight_string_literal(_: &request::Context, hl: &mut Highlighter, token: SyntaxToken) {
 	if let Some(parent) = token.parent() {
 		match parent.kind() {
-			Syn::IncludeDirective => {
+			Syntax::IncludeDirective => {
 				hl.advance_mod(SemToken::String, token.text_range(), SemTokenFlags::LINK);
 				return;
 			}
-			Syn::DeprecationQual | Syn::StateLight | Syn::VersionQual | Syn::VersionDirective => {
+			Syntax::DeprecationQual | Syntax::StateLight | Syntax::VersionQual | Syntax::VersionDirective => {
 				hl.advance(SemToken::String, token.text_range());
 				return;
 			}

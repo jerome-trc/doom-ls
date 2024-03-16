@@ -1,4 +1,4 @@
-use doomfront::zdoom::zscript::{Syn, SyntaxToken};
+use doomfront::zdoom::zscript::{Syntax, SyntaxToken};
 use lsp_types::{HoverContents, LanguageString, MarkedString};
 
 /// Documentation and code samples here are provided courtesy of zdoom-docs.
@@ -34,11 +34,11 @@ pub(super) fn hover_info_for(token: SyntaxToken) -> Option<HoverContents> {
 	};
 
 	let (kw, contents) = match token.kind() {
-		Syn::KwAbstract => (
+		Syntax::KwAbstract => (
 			"abstract",
 			&["A class marked `abstract` cannot be instantiated with `new`."],
 		),
-		Syn::KwAction => (
+		Syntax::KwAction => (
 			"action",
 			&[indoc::indoc! {
 				"ZScript includes an extra method type for descendents of `Actor`
@@ -49,14 +49,14 @@ pub(super) fn hover_info_for(token: SyntaxToken) -> Option<HoverContents> {
 				which this action was called from."
 			}],
 		),
-		Syn::KwAlignOf => (
+		Syntax::KwAlignOf => (
 			"alignOf",
 			&[indoc::indoc! {
 				"Can be used as the left side of a unary expression to get the
 				memory alignment of that expression's output type in bytes."
 			}],
 		),
-		Syn::KwBreak => (
+		Syntax::KwBreak => (
 			"break",
 			&[indoc::indoc! {
 				r#"`break` is available in loop statements and switch statements,
@@ -75,7 +75,7 @@ pub(super) fn hover_info_for(token: SyntaxToken) -> Option<HoverContents> {
 				```"#
 			}],
 		),
-		Syn::KwClass => (
+		Syntax::KwClass => (
 			"class",
 			&[indoc::indoc! {
 				r#"A class defines an object type within ZScript, and is most
@@ -97,8 +97,8 @@ pub(super) fn hover_info_for(token: SyntaxToken) -> Option<HoverContents> {
 				```"#,
 			}],
 		),
-		Syn::KwElse => ("else", &[DOCS_IF_ELSE]),
-		Syn::KwEnum => (
+		Syntax::KwElse => ("else", &[DOCS_IF_ELSE]),
+		Syntax::KwEnum => (
 			"enum",
 			&[indoc::indoc! {
 				"An enumeration is a list of named numbers.
@@ -132,14 +132,14 @@ pub(super) fn hover_info_for(token: SyntaxToken) -> Option<HoverContents> {
 				```"
 			}],
 		),
-		Syn::KwFinal => (
+		Syntax::KwFinal => (
 			"final",
 			&[indoc::indoc! {
 				"Used to mark overrides of abstract and virtual functions,
 				preventing them from being overriden again."
 			}],
 		),
-		Syn::KwFor => (
+		Syntax::KwFor => (
 			"for",
 			&[indoc::indoc! {
 				"The for loop takes a limited statement and two optional expressions:
@@ -148,8 +148,8 @@ pub(super) fn hover_info_for(token: SyntaxToken) -> Option<HoverContents> {
 				and one which is executed every time the loop iterates."
 			}],
 		),
-		Syn::KwIf => ("if", &[DOCS_IF_ELSE]),
-		Syn::KwInclude => (
+		Syntax::KwIf => ("if", &[DOCS_IF_ELSE]),
+		Syntax::KwInclude => (
 			"#include",
 			&[indoc::indoc! {
 				r#"Include directives include other files to be processed by the ZScript
@@ -169,21 +169,21 @@ pub(super) fn hover_info_for(token: SyntaxToken) -> Option<HoverContents> {
 				```"#
 			}],
 		),
-		Syn::KwInternal => (
+		Syntax::KwInternal => (
 			"internal",
 			&[indoc::indoc! {
 				"Marks a member field as only being writable from ZScript code in
 				the base resource archive (generally `gzdoom.pk3`)."
 			}],
 		),
-		Syn::KwLatent => (
+		Syntax::KwLatent => (
 			"latent",
 			&[indoc::indoc! {
 				"`latent` can be used to mark member fields,
 				but it does nothing and its purpose is unknown."
 			}],
 		),
-		Syn::KwLet => (
+		Syntax::KwLet => (
 			"let",
 			&[indoc::indoc! {
 				r#"The `let` type automatically determines the type of a variable
@@ -204,7 +204,7 @@ pub(super) fn hover_info_for(token: SyntaxToken) -> Option<HoverContents> {
 				```"#
 			}],
 		),
-		Syn::KwNative => (
+		Syntax::KwNative => (
 			"native",
 			&[indoc::indoc! {
 				"Marks a `class`, `struct`, member field or function as originating
@@ -212,7 +212,7 @@ pub(super) fn hover_info_for(token: SyntaxToken) -> Option<HoverContents> {
 				This qualifier is restricted from user code."
 			}],
 		),
-		Syn::KwReturn => (
+		Syntax::KwReturn => (
 			"return",
 			&[indoc::indoc! {
 				r#"`return` is available in functions. If the function does not return
@@ -250,14 +250,14 @@ pub(super) fn hover_info_for(token: SyntaxToken) -> Option<HoverContents> {
 				```"#
 			}],
 		),
-		Syn::KwSizeOf => (
+		Syntax::KwSizeOf => (
 			"sizeOf",
 			&[indoc::indoc! {
 				"Can be used as the left side of a unary expression to get the
 				size of that expression's output type in bytes."
 			}],
 		),
-		Syn::KwStruct => (
+		Syntax::KwStruct => (
 			"struct",
 			&[indoc::indoc! {
 				"A structure is an object type that does not inherit from Object
@@ -274,7 +274,7 @@ pub(super) fn hover_info_for(token: SyntaxToken) -> Option<HoverContents> {
 				```",
 			}],
 		),
-		Syn::KwSwitch => (
+		Syntax::KwSwitch => (
 			"switch",
 			&[indoc::indoc! {
 				r#"A switch statement takes an expression of integer or name type
@@ -301,15 +301,15 @@ pub(super) fn hover_info_for(token: SyntaxToken) -> Option<HoverContents> {
 					```"#
 			}],
 		),
-		Syn::KwTransient => (
+		Syntax::KwTransient => (
 			"transient",
 			&[indoc::indoc! {
 				"Member fields marked `transient` are not saved into save games.
 				Required for unserializable objects and recommended for UI context objects."
 			}],
 		),
-		Syn::KwUntil => ("until", &[DOCS_WHILE_UNTIL]),
-		Syn::KwWhile => ("while", &[DOCS_WHILE_UNTIL]),
+		Syntax::KwUntil => ("until", &[DOCS_WHILE_UNTIL]),
+		Syntax::KwWhile => ("while", &[DOCS_WHILE_UNTIL]),
 		// TODO: The rest!
 		_ => return None,
 	};

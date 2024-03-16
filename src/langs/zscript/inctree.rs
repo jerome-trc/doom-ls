@@ -4,7 +4,7 @@ use std::path::Path;
 
 use doomfront::{
 	rowan::{ast::AstNode, GreenNode},
-	zdoom::zscript::{ast, Syn, SyntaxNode},
+	zdoom::zscript::{ast, Syntax, SyntaxNode},
 };
 use lsp_types::{Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, Url};
 use petgraph::prelude::DiGraphMap;
@@ -48,7 +48,7 @@ pub(crate) fn walk(core: &mut Core) {
 			.filter_map(|n_or_t| {
 				n_or_t
 					.into_node()
-					.filter(|node| node.kind() == Syn::IncludeDirective.into())
+					.filter(|node| node.kind() == Syntax::IncludeDirective.into())
 					.map(|gnd| gnd.to_owned())
 			})
 			.par_bridge()

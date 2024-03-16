@@ -2,7 +2,7 @@
 
 use doomfront::{
 	rowan::{ast::AstNode, TextRange},
-	zdoom::zscript::{ast, Syn, SyntaxNode},
+	zdoom::zscript::{ast, Syntax, SyntaxNode},
 };
 use lsp_types::SymbolKind;
 use vtutil::string::AnyDisplay;
@@ -251,21 +251,21 @@ pub(crate) fn lsp_kind(_: &UserSymbol, datum: &Datum) -> SymbolKind {
 #[must_use]
 pub(crate) fn symbol_crit_span(node: &SyntaxNode) -> TextRange {
 	match node.kind() {
-		Syn::ClassDef => {
+		Syntax::ClassDef => {
 			let classdef = ast::ClassDef::cast(node.clone()).unwrap();
-			let start = classdef.keyword().text_range().start();
+			let start = classdef.head().keyword().text_range().start();
 
-			let end = if let Some(qual) = classdef.qualifiers().last() {
+			let end = if let Some(qual) = classdef.head().qualifiers().last() {
 				qual.text_range().end()
-			} else if let Some(parent) = classdef.parent_class() {
+			} else if let Some(parent) = classdef.head().parent_class() {
 				parent.text_range().end()
 			} else {
-				classdef.name().unwrap().text_range().end()
+				classdef.head().name().unwrap().text_range().end()
 			};
 
 			TextRange::new(start, end)
 		}
-		Syn::FunctionDecl => {
+		Syntax::FunctionDecl => {
 			let fndecl = ast::FunctionDecl::cast(node.clone()).unwrap();
 
 			let start = if let Some(qual) = fndecl.qualifiers().iter().next() {
@@ -282,13 +282,13 @@ pub(crate) fn symbol_crit_span(node: &SyntaxNode) -> TextRange {
 
 			TextRange::new(start, end)
 		}
-		Syn::VarName => {
+		Syntax::VarName => {
 			let parent = node.parent().unwrap();
-			debug_assert_eq!(parent.kind(), Syn::FieldDecl);
+			debug_assert_eq!(parent.kind(), Syntax::FieldDecl);
 			parent.text_range()
 		}
-		Syn::StateLabel | Syn::FlagDef | Syn::PropertyDef | Syn::EnumVariant => node.text_range(),
-		Syn::StructDef => {
+		Syntax::StateLabel | Syntax::FlagDef | Syntax::PropertyDef | Syntax::EnumVariant => node.text_range(),
+		Syntax::StructDef => {
 			let structdef = ast::StructDef::cast(node.clone()).unwrap();
 
 			let start = structdef.keyword().text_range().start();
@@ -301,7 +301,7 @@ pub(crate) fn symbol_crit_span(node: &SyntaxNode) -> TextRange {
 
 			TextRange::new(start, end)
 		}
-		Syn::StaticConstStat => {
+		Syntax::StaticConstStat => {
 			let sconst = ast::StaticConstStat::cast(node.clone()).unwrap();
 
 			TextRange::new(
@@ -309,7 +309,7 @@ pub(crate) fn symbol_crit_span(node: &SyntaxNode) -> TextRange {
 				sconst.name().unwrap().text_range().end(),
 			)
 		}
-		Syn::MixinClassDef => {
+		Syntax::MixinClassDef => {
 			let mixindef = ast::MixinClassDef::cast(node.clone()).unwrap();
 			let ident = mixindef.name().unwrap();
 
@@ -318,7 +318,7 @@ pub(crate) fn symbol_crit_span(node: &SyntaxNode) -> TextRange {
 				ident.text_range().start(),
 			)
 		}
-		Syn::ConstDef => {
+		Syntax::ConstDef => {
 			let constdef = ast::ConstDef::cast(node.clone()).unwrap();
 
 			TextRange::new(
@@ -326,7 +326,7 @@ pub(crate) fn symbol_crit_span(node: &SyntaxNode) -> TextRange {
 				constdef.syntax().text_range().end(),
 			)
 		}
-		Syn::EnumDef => {
+		Syntax::EnumDef => {
 			let enumdef = ast::EnumDef::cast(node.clone()).unwrap();
 			let ident = enumdef.name().unwrap();
 
