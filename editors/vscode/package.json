@@ -28,6 +28,22 @@
 	"contributes": {
 		"languages": [
 			{
+				"id": "wadmerge",
+				"aliases": [
+					"WadMerge"
+				],
+				"extensions": [
+					".wadmerge"
+				],
+				"filenames": [
+					"wadmerge",
+					"Wadmerge",
+					"WadMerge",
+					"WADMERGE"
+				],
+				"configuration": "./langs/wadmerge.cfg.json"
+			},
+			{
 				"id": "zscript",
 				"aliases": [
 					"ZScript"
@@ -747,6 +763,11 @@
 			}
 		},
 		"grammars": [
+			{
+				"language": "wadmerge",
+				"scopeName": "source.wadmerge",
+				"path": "./syntaxes/wadmerge.tmLanguage.json"
+			},
 			{
 				"language": "zscript",
 				"scopeName": "source.zscript",

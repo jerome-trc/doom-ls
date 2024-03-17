@@ -1,0 +1,60 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "WadMerge",
+	"patterns": [
+		{
+			"include": "#comments"
+		},
+		{
+			"include": "#directives"
+		},
+		{
+			"include": "#keywords"
+		},
+		{
+			"include": "#strings"
+		},
+		{
+			"include": "#variable"
+		}
+	],
+	"repository": {
+		"comments": {
+			"patterns": [
+				{
+					"name": "comment.line.pound.wadmerge",
+					"begin": "\\#",
+					"end": "$",
+					"contentName": "comment.line.pound.text.wadmerge"
+				}
+			]
+		},
+		"directives": {
+			"patterns": [
+				{
+					"name": "keyword.control.directive.wadmerge",
+					"match": "\\b(?i:clear|create|createbuffer|createfile|datemarker|discard|echo|end|filecharsub|finish|load|marker|merge|mergedeutexfile|mergedir|mergeentry|mergeentryfile|mergefile|mergemap|mergemapfile|mergenamespace|mergenamespacefile|mergeswantbls|mergetexturedir|mergewad|mergewaddir|save|valid)\\b"
+				}
+			]
+		},
+		"keywords": {},
+		"strings": {
+			"patterns": [
+				{
+					"name": "string.quoted.double.wadmerge",
+					"begin": "(?<!\\\\)\"",
+					"end": "(?<!\\\\)\""
+				}
+			]
+		},
+		"variable": {
+			"patterns": [
+				{
+					"name": "variable.other.readwrite.wadmerge",
+					"match": "\\b[a-zA-Z0-9]\\w*?(?:\\[.*?\\])??\\b"
+				}
+			]
+		}
+	},
+	"scopeName": "source.wadmerge"
+}
